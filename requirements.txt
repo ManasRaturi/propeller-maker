@@ -1,0 +1,6 @@
+# Minimum runtime dependencies for the local project environment
+cadquery>=2.4.0
+customtkinter>=5.2.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+scipy>=1.10.0
