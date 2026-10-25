@@ -195,11 +195,12 @@ class PropellerApp(ctk.CTk):
         self.blades_seg = self._segment(parent, [str(i) for i in range(2, 9)],
                                         lambda _value: self._schedule_metrics(), "2")
         self.blades_seg.pack(fill="x")
-        ctk.CTkLabel(parent, text="Handedness", anchor="w", height=20,
-                     font=self._font(12), text_color=MUTED).pack(fill="x", pady=(6, 2))
-        self.hand_seg = self._segment(parent, ["CCW [RH]", "CW [LH]"],
-                                      lambda _value: self._schedule_metrics(), "CCW [RH]")
-        self.hand_seg.pack(fill="x")
+        badge_frame = ctk.CTkFrame(parent, fg_color=FIELD, corner_radius=4,
+                                   border_width=1, border_color=BORDER)
+        badge_frame.pack(fill="x", pady=(8, 2))
+        ctk.CTkLabel(badge_frame, text="ROTATION STANDARD: CW (CLOCKWISE // +Z THRUST)",
+                     height=28, font=self._font(10, mono=True, bold=True),
+                     text_color=OK).pack(fill="x", padx=6)
         self.input_note = ctk.CTkLabel(parent, text="10 x 4.5 in benchmark", anchor="w",
                                         height=22, font=self._font(11), text_color=MUTED)
         self.input_note.pack(fill="x", pady=(2, 0))
@@ -209,7 +210,8 @@ class PropellerApp(ctk.CTk):
         card.pack(fill="x", pady=(0, 2))
         self.metrics_card = card
         self.metric_labels = {}
-        for key, label in [("ratio", "Pitch / diameter"), ("hub", "Hub outer diameter"),
+        for key, label in [("thrust", "Static thrust (6k RPM)"),
+                           ("ratio", "Pitch / diameter"), ("hub", "Hub outer diameter"),
                            ("bore", "Center bore diameter"), ("height", "Hub thickness"),
                            ("root", "Root pitch angle"), ("tip", "Tip pitch angle"),
                            ("area", "Swept disk area")]:
@@ -371,7 +373,7 @@ class PropellerApp(ctk.CTk):
             params = PropellerParameters(
                 diameter_mm=values["diameter"], pitch_mm=values["pitch"],
                 num_blades=int(self.blades_seg.get()),
-                handedness="CCW" if self.hand_seg.get().startswith("CCW") else "CW")
+                handedness="CW")
             return params
         except (ValueError, OverflowError) as exc:
             if show_errors:
@@ -397,7 +399,9 @@ class PropellerApp(ctk.CTk):
         ratio = params.pitch_to_diameter_ratio
         scale = 1 if self.current_unit == "mm" else 1 / 25.4
         suffix = self.current_unit
+        thrust_n, thrust_gf = params.estimate_static_thrust(rpm=6000.0)
         entries = {
+            "thrust": f"{thrust_n:.2f} N ({thrust_gf:.0f} gf)",
             "ratio": f"{ratio:.3f}",
             "hub": f"{params.hub_diameter_mm * scale:.3f} {suffix}",
             "bore": f"{params.bore_diameter_mm * scale:.3f} {suffix}",
@@ -411,7 +415,7 @@ class PropellerApp(ctk.CTk):
         self.metric_labels["ratio"].configure(text_color=WARNING if unusual else NUMERIC)
         self.input_note.configure(
             text="P/D outside typical 0.2–2.5 range" if unusual else
-                 f"{params.diameter_mm / 25.4:.4g} x {params.pitch_mm / 25.4:.4g} in  /  {params.num_blades} blades  /  {params.handedness}",
+                 f"{params.diameter_mm / 25.4:.4g} x {params.pitch_mm / 25.4:.4g} in  /  {params.num_blades} blades  /  CW (+Z Thrust)",
             text_color=WARNING if unusual else MUTED)
         if not self.is_generating:
             if self._cached_params == self._signature(params):

@@ -48,7 +48,7 @@ def attach_smoke_test(app, report_path: Path, output_path: Path):
             if state["phase"] == "startup":
                 p = app._parse_parameters()
                 check("benchmark_defaults", p.diameter_mm == 254 and p.pitch_mm == 114.3
-                      and p.num_blades == 2 and p.handedness == "CCW")
+                      and p.num_blades == 2 and p.handedness == "CW")
                 check("validated_actual_viewport", CadGenerator.validate_topology(app.current_model.val())["is_watertight"])
                 for _ in range(20):
                     app._on_unit_toggled("in")

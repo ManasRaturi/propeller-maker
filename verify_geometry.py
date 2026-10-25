@@ -221,12 +221,12 @@ def main() -> int:
     started = time.perf_counter()
     report: dict[str, Any] = {
         "benchmark": {"diameter_mm": 254.0, "pitch_mm": 114.3,
-                      "num_blades": 2, "handedness": "CCW"},
+                      "num_blades": 2, "handedness": "CW"},
         "step_path": str(output), "report_path": str(report_path),
         "existing_step": args.existing,
     }
     try:
-        params = PropellerParameters(254.0, 114.3, 2, "CCW")
+        params = PropellerParameters(254.0, 114.3, 2, "CW")
         if not args.existing:
             def progress(fraction: float, message: str) -> None:
                 if args.verbose:
