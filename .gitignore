@@ -36,6 +36,7 @@ venv.bak/
 
 # Generated CAD files & test outputs
 work/
+.taste-skill/
 *.report.json
 
 # IDEs and Editors

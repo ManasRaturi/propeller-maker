@@ -58,7 +58,7 @@ CFD aerodynamic audits of earlier coordinate conventions identified that backwar
 4. **Built-In Blade Element Momentum Theory (BEMT) Analytical Thrust Check**:
    - Built-in verification function `estimate_static_thrust_bemt(D, P, B, rpm)` integrates elemental lift and Prandtl tip-loss corrections:
      $$dT = \frac{1}{2}\rho V_{eff}^2 c(r) [C_L \cos\phi_i - C_D \sin\phi_i] dr$$
-   - Displays real-time static thrust in Newtons and grams-force in the UI telemetry card (**~6.38 N / 650 gf at 6,000 RPM** for the 10x4.5 benchmark), matching UIUC wind tunnel experimental benchmarks before running 3D CFD.
+   - Displays real-time static thrust in Newtons and grams-force under Engineering details (**~6.38 N / 650 gf at 6,000 RPM** for the 10x4.5 benchmark), matching UIUC wind tunnel experimental benchmarks before running 3D CFD.
 
 ---
 
@@ -96,10 +96,10 @@ python scripts/generate_study_pdf.py
   - Dynamically sized hub height guaranteeing complete blade root enclosure.
   - Post-union concentric through-bore cut ensuring zero blade root encroachment inside the mounting shaft.
 - **Desktop Engineering Workstation**:
-  - Sleek modern dark-themed GUI powered by CustomTkinter.
+  - Quiet light desktop UI powered by CustomTkinter, with a spacious model preview.
   - Interactive orthographic 3D CAD viewport with single-click camera presets (Isometric, Top $+Z$, Front, Side).
   - Real-time 2D aerodynamic distribution graphs (Chord length $c(r)$ and Twist angle $\beta(r)$).
-  - Instant telemetry: Static thrust at 6,000 RPM (BEMT), Pitch-to-Diameter ratio, hub/bore dimensions, root/tip pitch angles, and disk swept area.
+  - Hub dimensions at a glance; engineering metrics and blade profiles available on demand.
 - **Bulletproof Export Safety**:
   - Atomic two-stage STEP export with round-trip reimport verification prior to committing files to disk.
 
@@ -200,23 +200,19 @@ $$y_t(x) = 5 t \left( 0.2969\sqrt{x} - 0.1260 x - 0.3516 x^2 + 0.2843 x^3 - 0.10
 
 ## User Interface
 
-The desktop workstation is designed for clear visual inspection and responsive parameter iteration:
+The native CustomTkinter workstation puts the propeller first, with a neutral light frame, a white preview sheet and restrained teal model shading.
 
-- **Parameter Controls**: Direct numeric inputs for Diameter and Pitch, segmented button selector for Blade Count (2–8), and read-only CW badge.
-- **Telemetry Card**: Real-time evaluation of:
-  - **Static Thrust at 6,000 RPM (BEMT analytical prediction)**
-  - Pitch-to-Diameter ($P/D$) ratio
-  - Hub Outer Diameter and Center Bore Diameter
-  - Hub Axial Thickness
-  - Root Pitch Angle ($\beta_{root}$) and Tip Pitch Angle ($\beta_{tip}$)
-  - Swept Disk Area ($A = \pi R^2$)
-- **3D Orthographic CAD Viewport**:
-  - Built with Matplotlib 3D with equal physical aspect scaling across $X, Y, Z$.
-  - Shaded Poly3D triangulation with directional illumination.
-  - Interactive mouse rotation and quick-alignment buttons: **Iso**, **Top (+Z)**, **Front**, and **Side**.
-- **2D Aerodynamic Plots**:
-  - Live **Chord Distribution $c(r)$** plot with marked transition and peak stations.
-  - Live **Twist Distribution $\beta(r)$** plot comparing local pitch angles.
+- **Dimensions**: Diameter, pitch, blades (2–8) and mm/in units are the only editable model inputs. Rotation remains clockwise.
+- **Hub dimensions**: Outer diameter, shaft bore and thickness stay visible for mounting and fabrication.
+- **Engineering details**: A disclosure holds pitch/diameter ratio, root and tip pitch, swept area, estimated thrust at 6,000 RPM, and solid validation details.
+- **3D preview**: The same validated solid used for STEP export, with equal physical X/Y/Z scale. Drag to orbit, right-drag to zoom; use Isometric, Top, Front or Side for a fixed view. Axes are optional.
+- **Blade profiles**: Expand the lower disclosure for the existing chord and twist distributions.
+- **Actions**: Update preview applies edits; Export STEP opens the existing save dialog and validation pipeline. Status messages explain pending edits, generation and export.
+- **Portable resources**: IBM Plex fonts and their OFL license are bundled under `ui/assets/fonts/`. Windows registers them privately for the app process. No font installation, web view, online asset or new runtime dependency is needed. Other platforms retain native font fallback if Plex is unavailable to Tk.
+
+[Figma design and implementation notes](docs/ui-design.md).
+
+![Figma reference for the desktop UI](docs/ui-preview.png)
 
 ---
 
@@ -310,7 +306,15 @@ Output produces a standardized JSON audit report (e.g. `work/benchmark_10x45.rep
 
 ### UI & Export Smoke Test
 
-Run automated smoke tests across the full UI stack:
+For checks without opening any window:
+
+```bash
+python verify_ui_headless.py
+```
+
+This checks parameter validation, unit conversion, metrics, caching, serialized workers and export callbacks using stub widgets. The CAD audit above exercises real geometry independently.
+
+The optional full native smoke test below **opens and resizes a window**; run it when desktop interaction is convenient:
 
 ```bash
 python main.py --smoke-test --report work/ui-smoke.report.json --test-export work/ui-smoke.step
@@ -349,7 +353,8 @@ Propeller Maker/
 ├── run_windows.bat         # Minimal Windows launcher
 ├── run_unix.sh             # Linux & macOS shell launcher
 ├── verify_geometry.py      # Headless CAD benchmark & B-Rep topology audit
-├── verify_ui.py            # Automated CustomTkinter UI smoke test
+├── verify_ui.py            # Optional visible native UI smoke test
+├── verify_ui_headless.py   # Controller regression checks without windows
 ├── scripts/
 │   ├── generate_study_pdf.py # Generates Study.pdf & high-res vector diagrams
 │   └── diagrams/           # Vector diagrams embedded in Study.pdf
@@ -359,7 +364,10 @@ Propeller Maker/
 │   └── cad_generator.py    # OpenCASCADE B-Rep builder, lofts, booleans, STEP IO
 └── ui/
     ├── __init__.py
-    └── main_window.py      # CustomTkinter interface, 3D viewport, 2D charts
+    ├── main_window.py      # Existing controller, worker and plot rendering
+    ├── layout.py           # Native widget layout and view disclosures
+    ├── theme.py            # Visual tokens and process-private fonts
+    └── assets/fonts/       # Bundled IBM Plex files and OFL license
 ```
 
 ---

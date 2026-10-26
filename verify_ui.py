@@ -67,9 +67,9 @@ def attach_smoke_test(app, report_path: Path, output_path: Path):
                     app.update_idletasks()
                     bottom = app.status_bar.winfo_rooty()+app.status_bar.winfo_height()
                     scale = app.sidebar_frame._get_widget_scaling()
-                    check("layout_"+size, abs(app.sidebar_frame.winfo_width()-340*scale) <= 1
-                          and abs(app.header_frame.winfo_height()-40*scale) <= 1
-                          and abs(app.status_bar.winfo_height()-28*scale) <= 1
+                    check("layout_"+size, abs(app.sidebar_frame.winfo_width()-304*scale) <= 1
+                          and abs(app.header_frame.winfo_height()-48*scale) <= 1
+                          and abs(app.status_bar.winfo_height()-32*scale) <= 1
                           and bottom <= app.winfo_rooty()+app.winfo_height()+1,
                           sidebar_width=app.sidebar_frame.winfo_width())
                 for elev, azim in ((90,-90),(0,-90),(0,0),(28,45)):
@@ -85,7 +85,7 @@ def attach_smoke_test(app, report_path: Path, output_path: Path):
                 app.after(200,poll)
                 return
             check("ui_step_export_action", output_path.exists()
-                  and app.status_text.cget("text") == "STEP EXPORTED",
+                  and app.status_text.cget("text") == "STEP exported",
                   output_path=str(output_path), bytes=output_path.stat().st_size)
             check("no_tk_or_worker_errors", not errors and app.last_error is None)
             state["phase"] = "complete"
