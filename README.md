@@ -14,7 +14,7 @@ An engineering CAD workstation and automated Python pipeline for generating **co
 The generator is locked exclusively to the **Clockwise (`CW`) rotation standard** (+Z upstream thrust direction) and matches the commercial UAV GrabCAD 10 x 4.5 benchmark: **254.0 mm diameter, 114.3 mm geometric pitch, 2 blades, Clockwise (CW)**.
 
 > 📘 **Looking for an in-depth mathematical walkthrough?**  
-> Read the complete illustrated engineering manual in [`Study.pdf`](./Study.pdf) located in the project root folder. It covers airfoil physics, velocity triangles, spline clustering, cylindrical wrapping, and peer-reviewed literature for freshman engineering students.
+> Read the complete illustrated engineering manual in [`Study.pdf`](./Study.pdf) located in the project root folder. It explains the app, airfoil geometry, pitch and twist, planar CAD sections, the thrust estimate, and practical verification through worked examples.
 
 ---
 
@@ -64,13 +64,15 @@ CFD aerodynamic audits of earlier coordinate conventions identified that backwar
 
 ## Educational Engineering Manual (`Study.pdf`)
 
-A comprehensive, 5-page illustrated engineering guide is available directly in the project root: [`Study.pdf`](./Study.pdf). Generated via `scripts/generate_study_pdf.py`, it contains:
+A **20-page study guide** is available directly in the project root: [`Study.pdf`](./Study.pdf). It is rebuilt from the current engine using `scripts/generate_study_pdf.py` and includes:
 
-- **Section 1–3**: Freshman-friendly explanations of aerodynamic lift, Newton's Third Law, jargon definitions (Chord, Camber, Pitch, Helix Angle, Angle of Attack, B-Spline, Lofting, Watertight Solid), and a complete symbol nomenclature table.
-- **Section 4 & Diagram 1**: Airfoil anatomy, NACA 4412 camber and thickness polynomials, the $-0.1036 x_c^4$ closed trailing-edge CAD modification, and cosine point clustering ($x_c = \frac{1}{2}(1 - \cos\beta)$) to eliminate leading-edge spline kinking.
-- **Section 5 & Diagram 2**: The unrolled helix screw thread analogy ($\beta(r) = \arctan(P / 2\pi r)$), hub-to-tip twist breakdown ($35.6^\circ$ root vs. $8.1^\circ$ tip), CW velocity triangles, and BEMT thrust equations.
-- **Section 6 & Diagram 3**: The step-by-step CAD pipeline from 2D radial curves to 3D cylindrical conformal mapping (Carlton, 2018), dual cubic B-spline wires, OpenCascade NURBS skinning (`makeLoft`), ellipsoidal tip dome closure, and hub boolean cuts.
-- **Section 7**: Annotated bibliography of 6 foundational peer-reviewed research papers (Jacobs et al. 1933, Brandt & Selig 2011, Deters et al. 2014, Adkins & Liebeck 1994, Carlton 2018, Piegl & Tiller 1997) detailing how each paper governs specific lines of code in this project.
+- A practical app walkthrough and a two-page glossary with symbols, spoken Greek names and units.
+- Six code-sourced illustrations covering airfoil anatomy, pitch, CW axes, blade distributions, planar station ribs and mounting dimensions.
+- Step-by-step NACA, pitch, hub and thrust equations, plus a complete numerical example taking one normalized airfoil point into 3D.
+- Clear distinctions between estimated thrust, valid CAD topology, experimental performance and downstream CFD/structural work.
+- Practice questions with answers, clickable chapter bookmarks, primary references and a source-code map.
+
+Body fonts are embedded, and mathematical expressions are drawn as PDF vector outlines, including Greek letters, subscripts, superscripts and fractions. The generator checks text glyph coverage and chapter placement. It uses the existing local dependencies and bundled fonts; no TeX installation or network access is required.
 
 To recompile the manual at any time:
 ```bash
@@ -356,8 +358,10 @@ Propeller Maker/
 ├── verify_ui.py            # Optional visible native UI smoke test
 ├── verify_ui_headless.py   # Controller regression checks without windows
 ├── scripts/
-│   ├── generate_study_pdf.py # Generates Study.pdf & high-res vector diagrams
-│   └── diagrams/           # Vector diagrams embedded in Study.pdf
+│   ├── generate_study_pdf.py # Builds the 20-page Study.pdf from current engine values
+│   ├── study_layout.py     # Print styles, embedded fonts and vector equations
+│   ├── study_figures.py    # Six offscreen, code-sourced illustrations
+│   └── diagrams/           # High-resolution illustrations embedded in Study.pdf
 ├── core/
 │   ├── __init__.py
 │   ├── math_engine.py      # NACA generation, twist laws, APC chord, BEMT check

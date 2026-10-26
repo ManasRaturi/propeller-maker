@@ -1,0 +1,2 @@
+# Preserve generated PDF streams byte-for-byte across platforms.
+*.pdf binary

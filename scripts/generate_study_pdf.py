@@ -1,823 +1,525 @@
-"""Educational Engineering Manual Generator for Propeller Maker.
+"""Rebuild Study.pdf from the current engine, bundled fonts and vector equations.
 
-Generates Study.pdf in the project root folder:
-- Explains propeller aerodynamics & mathematical CAD modeling for 1st-year engineering students.
-- Generates and embeds high-resolution vector diagrams (airfoil anatomy, helix triangles, 3D pipeline).
-- Includes comprehensive mathematical symbol nomenclature table.
-- Dedicated final page with annotated bibliography of foundational peer-reviewed research papers.
+Run with the project's Python. No GUI, TeX installation or online service is used.
+Only documentation, diagrams and a quality report under work/ are written.
 """
 
-import math
-import os
-import sys
+import argparse
+from functools import partial
+import json
 from pathlib import Path
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
-from matplotlib.patches import FancyArrowPatch, Arc, Polygon, Wedge
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
-from reportlab.platypus import (
-    HRFlowable,
-    Image,
-    KeepTogether,
-    PageBreak,
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-    Table,
-    TableStyle,
-)
+from reportlab.platypus import Image, PageBreak
 
-# Project paths
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-OUTPUT_PDF = PROJECT_ROOT / "Study.pdf"
-DIAGRAMS_DIR = PROJECT_ROOT / "scripts" / "diagrams"
-DIAGRAMS_DIR.mkdir(parents=True, exist_ok=True)
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from core.math_engine import PropellerMathEngine, PropellerParameters
+from scripts.study_figures import make_figures
+from scripts.study_layout import (CHECKED_TEXT, EQUATIONS, WIDTH, Equation, StudyDoc,
+                                  paragraph, setup_fonts, styles, table, verify_text_glyphs)
 
 
-class NumberedCanvas(canvas.Canvas):
-    """Two-pass canvas to dynamically compute and draw total page count."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._saved_page_states = []
-
-    def showPage(self):
-        self._saved_page_states.append(dict(self.__dict__))
-        self._startPage()
-
-    def save(self):
-        num_pages = len(self._saved_page_states)
-        for state in self._saved_page_states:
-            self.__dict__.update(state)
-            self.draw_decorations(num_pages)
-            super().showPage()
-        super().save()
-
-    def draw_decorations(self, num_pages):
-        self.saveState()
-        # Header (Pages 2+)
-        if self._pageNumber > 1:
-            self.setFont("Helvetica-Bold", 8)
-            self.setFillColor(colors.HexColor("#475569"))
-            self.drawString(36, 756, "PROPELLER AERODYNAMICS & MATHEMATICAL CAD MANUAL")
-            self.setFont("Helvetica", 8)
-            self.setFillColor(colors.HexColor("#64748B"))
-            self.drawRightString(576, 756, "Propeller Maker // CW Standard")
-            self.setStrokeColor(colors.HexColor("#CBD5E1"))
-            self.setLineWidth(0.6)
-            self.line(36, 750, 576, 750)
-
-        # Footer (All pages)
-        self.setFont("Helvetica", 8)
-        self.setFillColor(colors.HexColor("#64748B"))
-        self.drawString(36, 26, "Propeller Maker — Commercial CFD-Ready STEP Solid Generator")
-        self.drawRightString(576, 26, f"Page {self._pageNumber} of {num_pages}")
-        self.setStrokeColor(colors.HexColor("#CBD5E1"))
-        self.setLineWidth(0.6)
-        self.line(36, 36, 576, 36)
-        self.restoreState()
-
-
-# ==============================================================================
-# DIAGRAM GENERATION FUNCTIONS
-# ==============================================================================
-
-def generate_diagram_1(output_path: Path):
-    """Diagram 1 — Airfoil Anatomy & NACA 4412 Construction."""
-    fig, ax = plt.subplots(figsize=(7.5, 2.7), dpi=300)
-    fig.patch.set_facecolor("#FFFFFF")
-    ax.set_facecolor("#F8FAFC")
-
-    # NACA 4412 parameters
-    m = 0.04
-    p = 0.40
-    t = 0.12
-    n_pts = 45
-
-    beta_k = np.linspace(0.0, np.pi, n_pts)
-    xc = 0.5 * (1.0 - np.cos(beta_k))
-    yt = 5.0 * t * (0.2969 * np.sqrt(xc) - 0.1260 * xc - 0.3516 * xc**2
-                    + 0.2843 * xc**3 - 0.1036 * xc**4)
-    yt[[0, -1]] = 0.0
-
-    forward = xc < p
-    yc = np.where(forward, m / p**2 * (2 * p * xc - xc**2),
-                  m / (1 - p)**2 * ((1 - 2 * p) + 2 * p * xc - xc**2))
-    dy = np.where(forward, 2 * m / p**2 * (p - xc),
-                  2 * m / (1 - p)**2 * (p - xc))
-    yc[[0, -1]] = 0.0
-    theta = np.arctan(dy)
-
-    xu = xc - yt * np.sin(theta)
-    yu = yc + yt * np.cos(theta)
-    xl = xc + yt * np.sin(theta)
-    yl = yc - yt * np.cos(theta)
-
-    # Plot filled airfoil body
-    airfoil_x = np.concatenate((xu, xl[::-1]))
-    airfoil_y = np.concatenate((yu, yl[::-1]))
-    ax.fill(airfoil_x, airfoil_y, color="#E2E8F0", alpha=0.8, zorder=2)
-    ax.plot(xu, yu, color="#1E3A8A", linewidth=1.8, label="Upper (Suction) Surface $y_u(x)$", zorder=4)
-    ax.plot(xl, yl, color="#1D4ED8", linewidth=1.8, label="Lower (Pressure) Surface $y_l(x)$", zorder=4)
-
-    # Mean camber line
-    ax.plot(xc, yc, color="#DC2626", linestyle="--", linewidth=1.5,
-            label="Mean Camber Line $y_c(x)$ (Peak 4% at $x=0.4c$)", zorder=5)
-
-    # Chord line
-    ax.plot([0, 1], [0, 0], color="#64748B", linestyle="-.", linewidth=1.1, label="Chord Line ($c$)", zorder=3)
-
-    # Quarter chord axis
-    ax.axvline(x=0.25, color="#059669", linestyle=":", linewidth=1.3, label="Quarter-Chord ($0.25c$) Pitch Axis", zorder=3)
-    ax.plot(0.25, 0, marker="o", markersize=6, color="#059669", zorder=6)
-
-    # Cosine clustered points
-    ax.scatter(xu, yu, color="#0F172A", s=10, zorder=6, label="Cosine Spline Control Points ($x_c = \\frac{1-\\cos\\beta}{2}$)")
-    ax.scatter(xl, yl, color="#0F172A", s=10, zorder=6)
-
-    # Annotations
-    ax.annotate("Leading Edge (LE)\n(High point density)", xy=(0, 0), xytext=(-0.14, 0.09),
-                arrowprops=dict(arrowstyle="->", color="#0F172A", lw=1.2),
-                fontsize=8, fontweight="bold", color="#0F172A", ha="center")
-
-    ax.annotate("Trailing Edge (TE)\n(Closed via $-0.1036 x_c^4$)", xy=(1, 0), xytext=(1.02, 0.07),
-                arrowprops=dict(arrowstyle="->", color="#0F172A", lw=1.2),
-                fontsize=8, fontweight="bold", color="#0F172A", ha="center")
-
-    # Thickness envelope double arrow at max thickness
-    x_max_t = 0.30
-    y_u_max = float(np.interp(x_max_t, xu, yu))
-    y_l_max = float(np.interp(x_max_t, xl, yl))
-    ax.annotate("", xy=(x_max_t, y_u_max), xytext=(x_max_t, y_l_max),
-                arrowprops=dict(arrowstyle="<->", color="#7C3AED", lw=1.3))
-    ax.text(x_max_t + 0.02, (y_u_max + y_l_max) / 2, "Max Thickness $t = 12\\%c$",
-            color="#7C3AED", fontsize=8, fontweight="bold", va="center")
-
-    ax.set_xlim(-0.16, 1.18)
-    ax.set_ylim(-0.12, 0.16)
-    ax.set_aspect("equal")
-    ax.grid(True, linestyle="--", alpha=0.4, color="#94A3B8")
-    ax.set_xlabel("Normalized Chord Coordinate $x_c = x / c$", fontsize=8, color="#334155")
-    ax.set_ylabel("Airfoil Normal $y / c$", fontsize=8, color="#334155")
-    ax.tick_params(colors="#475569", labelsize=7)
-    for spine in ax.spines.values():
-        spine.set_color("#CBD5E1")
-    ax.legend(loc="upper right", fontsize=6.5, framealpha=0.9, facecolor="#FFFFFF", edgecolor="#CBD5E1")
-    ax.set_title("Diagram 1: NACA 4412 Profile Anatomy, Camber Line, & Cosine Spline Distribution",
-                 fontsize=9.5, fontweight="bold", color="#0F172A", pad=8)
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
-def generate_diagram_2(output_path: Path):
-    """Diagram 2 — Helix Pitch Triangle, Hub-to-Tip Twist, & CW Aerodynamic Vector Triangles."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.5, 2.7), dpi=300)
-    fig.patch.set_facecolor("#FFFFFF")
-
-    # Left Subplot: Helix Screw Thread Analogy & Twist
-    ax1.set_facecolor("#F8FAFC")
-    r_hub = 15.0
-    r_mid = 65.0
-    r_tip = 120.0
-    pitch = 114.3  # 4.5 inches in mm
-
-    circ_hub = 2.0 * np.pi * r_hub
-    circ_mid = 2.0 * np.pi * r_mid
-    circ_tip = 2.0 * np.pi * r_tip
-
-    beta_hub = np.degrees(np.arctan2(pitch, circ_hub))
-    beta_mid = np.degrees(np.arctan2(pitch, circ_mid))
-    beta_tip = np.degrees(np.arctan2(pitch, circ_tip))
-
-    # Plot unrolled helix triangle for midspan
-    ax1.plot([0, circ_mid], [0, 0], color="#334155", lw=1.5, label="Circumference $2\\pi r$ (Path in 1 Rev)")
-    ax1.plot([circ_mid, circ_mid], [0, pitch], color="#2563EB", lw=1.5, label="Axial Pitch $P$ (Advance in 1 Rev)")
-    ax1.plot([0, circ_mid], [0, pitch], color="#DC2626", lw=2.0, label="Helix Path (Blade Chord Angle $\\beta$)")
-
-    # Draw angle arc
-    arc_rad = circ_mid * 0.25
-    arc = Arc((0, 0), arc_rad * 2, arc_rad * 2, angle=0, theta1=0, theta2=beta_mid, color="#DC2626", lw=1.5)
-    ax1.add_patch(arc)
-    ax1.text(arc_rad * 1.15, arc_rad * 0.25, f"$\\beta(r) = {beta_mid:.1f}^\\circ$",
-             color="#DC2626", fontsize=7.5, fontweight="bold")
-
-    # Twist callouts
-    ax1.text(circ_mid * 0.05, pitch * 0.82,
-             f"Hub Twist:   $\\beta(r_{{root}}) \\approx {beta_hub:.1f}^\\circ$ (Steep)\n"
-             f"Midspan:      $\\beta(r_{{mid}})   \\approx {beta_mid:.1f}^\\circ$\n"
-             f"Tip Twist:     $\\beta(R)           \\approx {beta_tip:.1f}^\\circ$ (Flat)",
-             fontsize=7, family="monospace", bbox=dict(boxstyle="round,pad=0.4", fc="#FFFFFF", ec="#94A3B8"))
-
-    ax1.set_xlim(-20, circ_mid * 1.12)
-    ax1.set_ylim(-15, pitch * 1.15)
-    ax1.grid(True, linestyle="--", alpha=0.4, color="#94A3B8")
-    ax1.set_xlabel("Rotational Distance [mm]", fontsize=7.5, color="#334155")
-    ax1.set_ylabel("Axial Advance [mm]", fontsize=7.5, color="#334155")
-    ax1.tick_params(colors="#475569", labelsize=7)
-    for s in ax1.spines.values():
-        s.set_color("#CBD5E1")
-    ax1.set_title("A: Helix Pitch Triangle $\\beta(r) = \\arctan(P / 2\\pi r)$", fontsize=8.5, fontweight="bold", color="#0F172A")
-    ax1.legend(loc="lower right", fontsize=6, framealpha=0.9, facecolor="#FFFFFF", edgecolor="#CBD5E1")
-
-    # Right Subplot: Aerodynamic Vector Triangle for CW (+Z Thrust)
-    ax2.set_facecolor("#F8FAFC")
-
-    # Blade section tilted by pitch beta
-    beta_deg = 24.0
-    beta = np.radians(beta_deg)
-    phi_deg = 15.0
-    phi = np.radians(phi_deg)
-    alpha_deg = beta_deg - phi_deg
-
-    chord_len = 80.0
-    x_c = np.linspace(-chord_len * 0.25, chord_len * 0.75, 40)
-    # Cambered profile coordinates rotated by beta
-    t_prof = 8.0 * (1.0 - (x_c / chord_len)**2)
-    y_prof = 4.0 * np.sin(np.pi * (x_c + chord_len * 0.25) / chord_len)
-
-    # In CW rotation: +X is rotation direction, +Z is upstream thrust direction
-    x_rot = -x_c * np.cos(beta) - y_prof * np.sin(beta)
-    z_rot = -x_c * np.sin(beta) + y_prof * np.cos(beta)
-
-    ax2.plot(x_rot, z_rot, color="#1E3A8A", lw=2.2, label="Blade Airfoil Section")
-    ax2.plot(x_rot[0], z_rot[0], "ko", markersize=4)  # LE
-    ax2.text(x_rot[0] + 4, z_rot[0] + 4, "LE (+X, +Z)", fontsize=7, fontweight="bold", color="#1E3A8A")
-    ax2.plot(x_rot[-1], z_rot[-1], "ks", markersize=4)  # TE
-    ax2.text(x_rot[-1] - 32, z_rot[-1] - 8, "TE (-X, -Z)", fontsize=7, fontweight="bold", color="#1E3A8A")
-
-    # Flow velocities
-    pivot_x, pivot_z = 0.0, 0.0
-    v_rot_len = 60.0
-    v_axial_len = v_rot_len * np.tan(phi)
-
-    # V_rot arrow (incoming flow opposite to rotation: from +X toward pivot)
-    ax2.annotate("", xy=(pivot_x, pivot_z), xytext=(pivot_x + v_rot_len, pivot_z),
-                 arrowprops=dict(arrowstyle="->", color="#059669", lw=1.8))
-    ax2.text(pivot_x + v_rot_len * 0.35, pivot_z - 8, "$V_{rot} = \\Omega r$", color="#059669", fontsize=7.5, fontweight="bold")
-
-    # V_inflow arrow (from upstream +Z toward pivot)
-    ax2.annotate("", xy=(pivot_x, pivot_z), xytext=(pivot_x, pivot_z + v_axial_len * 2),
-                 arrowprops=dict(arrowstyle="->", color="#0284C7", lw=1.8))
-    ax2.text(pivot_x + 3, pivot_z + v_axial_len, "$V_\\infty + v_i$", color="#0284C7", fontsize=7.5, fontweight="bold")
-
-    # V_rel arrow
-    ax2.annotate("", xy=(pivot_x, pivot_z), xytext=(pivot_x + v_rot_len, pivot_z + v_axial_len * 2),
-                 arrowprops=dict(arrowstyle="->", color="#7C3AED", lw=2.0))
-    ax2.text(pivot_x + v_rot_len * 0.65, pivot_z + v_axial_len * 1.3, "$V_{rel}$", color="#7C3AED", fontsize=8, fontweight="bold")
-
-    # Aerodynamic forces: Lift L (perp to V_rel), Drag D (parallel to V_rel)
-    # Forward Thrust T (+Z)
-    lift_len = 45.0
-    thrust_len = lift_len * np.cos(phi)
-    torque_len = lift_len * np.sin(phi)
-
-    ax2.annotate("", xy=(pivot_x, pivot_z + thrust_len), xytext=(pivot_x, pivot_z),
-                 arrowprops=dict(arrowstyle="->", color="#DC2626", lw=2.2))
-    ax2.text(pivot_x - 30, pivot_z + thrust_len * 0.7, "Thrust (+Z)\n$T = L\\cos\\phi - D\\sin\\phi$",
-             color="#DC2626", fontsize=7.5, fontweight="bold")
-
-    ax2.annotate("", xy=(pivot_x - torque_len, pivot_z), xytext=(pivot_x, pivot_z),
-                 arrowprops=dict(arrowstyle="->", color="#D97706", lw=1.6))
-    ax2.text(pivot_x - torque_len - 15, pivot_z - 10, "Torque $Q$", color="#D97706", fontsize=7, fontweight="bold")
-
-    ax2.set_xlim(-65, 80)
-    ax2.set_ylim(-30, 65)
-    ax2.grid(True, linestyle="--", alpha=0.4, color="#94A3B8")
-    ax2.set_xlabel("Tangential Axis X (+X = CW Motion) [mm]", fontsize=7.5, color="#334155")
-    ax2.set_ylabel("Axial Axis Z (+Z = Thrust) [mm]", fontsize=7.5, color="#334155")
-    ax2.tick_params(colors="#475569", labelsize=7)
-    for s in ax2.spines.values():
-        s.set_color("#CBD5E1")
-    ax2.set_title("B: CW Velocity Triangle & Forward Thrust Generation", fontsize=8.5, fontweight="bold", color="#0F172A")
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
-def generate_diagram_3(output_path: Path):
-    """Diagram 3 — 2D Radial Planform, Cylindrical Wrapping, & 3D NURBS Lofting."""
-    fig = plt.figure(figsize=(7.5, 2.7), dpi=300)
-    fig.patch.set_facecolor("#FFFFFF")
-
-    # Subplot 1: Spanwise Chord & Twist Distributions
-    ax1 = fig.add_subplot(131)
-    ax1.set_facecolor("#F8FAFC")
-    xi = np.linspace(0.07, 1.0, 100)
-    from core.math_engine import PropellerMathEngine, PropellerParameters
-    p = PropellerParameters(254.0, 114.3, 2, "CW")
+def build_study_pdf(output_path=ROOT / "Study.pdf"):
+    setup_fonts()
+    CHECKED_TEXT.clear()
+    EQUATIONS.clear()
+    sheet = styles()
+    p = PropellerParameters(254.0, 114.3, 2)
     engine = PropellerMathEngine(p)
-    chords = [engine.chord_distribution(x, 254.0) for x in xi]
-    twists = [np.degrees(engine.pitch_angle_rad(114.3, x * 127.0, x)) for x in xi]
-
-    ax1.plot(xi, chords, color="#2563EB", lw=1.8, label="Chord $c(r)$ [mm]")
-    ax1.set_xlabel("Normalized Radius $r/R$", fontsize=7.5, color="#334155")
-    ax1.set_ylabel("Chord [mm]", fontsize=7.5, color="#2563EB")
-    ax1.tick_params(colors="#475569", labelsize=7)
-    ax1.grid(True, linestyle="--", alpha=0.4, color="#94A3B8")
-
-    ax1_tw = ax1.twinx()
-    ax1_tw.plot(xi, twists, color="#DC2626", linestyle="--", lw=1.6, label="Twist $\\beta(r)$ [deg]")
-    ax1_tw.set_ylabel("Twist [deg]", fontsize=7.5, color="#DC2626")
-    ax1_tw.tick_params(colors="#DC2626", labelsize=7)
-
-    for s in ax1.spines.values():
-        s.set_color("#CBD5E1")
-    ax1.set_title("A: Planform & Twist", fontsize=8, fontweight="bold", color="#0F172A")
-
-    # Subplot 2: Cylindrical Conformal Mapping (Carlton, 2018)
-    ax2 = fig.add_subplot(132)
-    ax2.set_facecolor("#F8FAFC")
-
-    # Draw circular cylinder arc
-    theta_arc = np.linspace(np.pi / 2 - 0.45, np.pi / 2 + 0.45, 100)
-    r_cyl = 50.0
-    x_arc = r_cyl * np.cos(theta_arc)
-    y_arc = r_cyl * np.sin(theta_arc)
-    ax2.plot(x_arc, y_arc, color="#94A3B8", linestyle=":", lw=1.5, label="Cylinder $r$")
-
-    # Airfoil wrapped along the arc
-    s_tan = np.linspace(-15.0, 25.0, 50)
-    gamma = s_tan / r_cyl
-    x_wrap = r_cyl * np.sin(gamma)
-    y_wrap = r_cyl * np.cos(gamma)
-    ax2.plot(x_wrap, y_wrap, color="#059669", lw=2.2, label="Wrapped Airfoil Wire")
-    ax2.plot(x_wrap[0], y_wrap[0], "ks", markersize=3.5)
-    ax2.text(x_wrap[0] - 8, y_wrap[0] - 6, "TE", fontsize=7, fontweight="bold")
-    ax2.plot(x_wrap[-1], y_wrap[-1], "ko", markersize=3.5)
-    ax2.text(x_wrap[-1] + 2, y_wrap[-1] - 4, "LE", fontsize=7, fontweight="bold")
-
-    # Flat unrolled tangent line
-    ax2.plot(s_tan, np.full_like(s_tan, r_cyl), color="#2563EB", linestyle="--", lw=1.2, label="Flat Arc $s_{tan}$")
-    ax2.annotate("", xy=(x_wrap[15], y_wrap[15]), xytext=(s_tan[15], r_cyl),
-                 arrowprops=dict(arrowstyle="->", color="#DC2626", lw=1.2))
-    ax2.text(s_tan[15] + 2, r_cyl + 2.5, "$\\gamma = s_{tan}/r$\n$X=r\\sin\\gamma$\n$Y=r\\cos\\gamma$",
-             fontsize=6.5, color="#DC2626", fontweight="bold")
-
-    ax2.set_xlim(-26, 32)
-    ax2.set_ylim(40, 58)
-    ax2.set_aspect("equal")
-    ax2.grid(True, linestyle="--", alpha=0.4, color="#94A3B8")
-    ax2.tick_params(colors="#475569", labelsize=6.5)
-    for s in ax2.spines.values():
-        s.set_color("#CBD5E1")
-    ax2.set_title("B: Conformal Wrap", fontsize=8, fontweight="bold", color="#0F172A")
-    ax2.legend(loc="lower left", fontsize=5.5, framealpha=0.9, facecolor="#FFFFFF", edgecolor="#CBD5E1")
-
-    # Subplot 3: 3D NURBS Lofting & Stacked Wireframes
-    ax3 = fig.add_subplot(133, projection="3d")
-    ax3.set_facecolor("#F8FAFC")
-    ax3.set_proj_type("ortho")
-
-    # Stack 7 representative stations
-    xi_sample = [0.10, 0.22, 0.40, 0.60, 0.80, 0.95, 1.0]
-    palette = ["#1E3A8A", "#2563EB", "#0284C7", "#059669", "#D97706", "#DC2626", "#7C3AED"]
-
-    for x_val, col in zip(xi_sample, palette):
-        pts = engine.section_coordinates(x_val, closed_loop=True)
-        ax3.plot(pts[:, 0], pts[:, 1], pts[:, 2], color=col, lw=1.2)
-
-    # Draw hub cylinder outline
-    theta_hub = np.linspace(0, 2 * np.pi, 50)
-    r_h = p.hub_radius_mm
-    h_len = p.hub_length_mm
-    ax3.plot(r_h * np.cos(theta_hub), r_h * np.sin(theta_hub), -h_len / 2, color="#64748B", lw=0.8)
-    ax3.plot(r_h * np.cos(theta_hub), r_h * np.sin(theta_hub), h_len / 2, color="#64748B", lw=0.8)
-
-    ax3.set_xlim(-30, 30)
-    ax3.set_ylim(0, 130)
-    ax3.set_zlim(-10, 10)
-    ax3.view_init(elev=24, azim=-55)
-    ax3.set_xlabel("X", fontsize=6.5, labelpad=-5)
-    ax3.set_ylabel("Y", fontsize=6.5, labelpad=-5)
-    ax3.set_zlabel("Z", fontsize=6.5, labelpad=-5)
-    ax3.tick_params(labelsize=5.5, pad=-2)
-    ax3.set_title("C: 3D Spline Stack & Loft", fontsize=8, fontweight="bold", color="#0F172A", pad=-2)
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
-# ==============================================================================
-# REPORTLAB PDF GENERATION
-# ==============================================================================
-
-def build_study_pdf():
-    """Build the comprehensive, multi-page Study.pdf document."""
-    diag1_path = DIAGRAMS_DIR / "diagram_1_airfoil.png"
-    diag2_path = DIAGRAMS_DIR / "diagram_2_helix.png"
-    diag3_path = DIAGRAMS_DIR / "diagram_3_pipeline.png"
-
-    print("Generating high-resolution engineering diagrams...")
-    generate_diagram_1(diag1_path)
-    generate_diagram_2(diag2_path)
-    generate_diagram_3(diag3_path)
-    print("All diagrams generated successfully.")
-
-    doc = SimpleDocTemplate(
-        str(OUTPUT_PDF),
-        pagesize=letter,
-        leftMargin=36,
-        rightMargin=36,
-        topMargin=46,
-        bottomMargin=46,
-    )
-
-    styles = getSampleStyleSheet()
-
-    # Custom styles
-    title_style = ParagraphStyle(
-        "DocTitle",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=20,
-        leading=24,
-        textColor=colors.HexColor("#0F172A"),
-        spaceAfter=4,
-    )
-
-    subtitle_style = ParagraphStyle(
-        "DocSubtitle",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=10.5,
-        leading=14,
-        textColor=colors.HexColor("#2563EB"),
-        spaceAfter=10,
-    )
-
-    h1_style = ParagraphStyle(
-        "Heading1_Custom",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=12,
-        leading=16,
-        textColor=colors.HexColor("#0F172A"),
-        spaceBefore=8,
-        spaceAfter=4,
-        keepWithNext=True,
-    )
-
-    h2_style = ParagraphStyle(
-        "Heading2_Custom",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=9.5,
-        leading=13,
-        textColor=colors.HexColor("#1E3A8A"),
-        spaceBefore=6,
-        spaceAfter=3,
-        keepWithNext=True,
-    )
-
-    body_style = ParagraphStyle(
-        "Body_Custom",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=8.2,
-        leading=11.2,
-        textColor=colors.HexColor("#1E293B"),
-        spaceAfter=5,
-    )
-
-    body_bold = ParagraphStyle(
-        "Body_Bold",
-        parent=body_style,
-        fontName="Helvetica-Bold",
-    )
-
-    code_style = ParagraphStyle(
-        "Code_Custom",
-        parent=styles["Normal"],
-        fontName="Courier",
-        fontSize=7.2,
-        leading=9.5,
-        textColor=colors.HexColor("#0F172A"),
-        backColor=colors.HexColor("#F1F5F9"),
-        borderPadding=4,
-        spaceAfter=5,
-    )
-
-    callout_style = ParagraphStyle(
-        "Callout",
-        parent=styles["Normal"],
-        fontName="Helvetica-Oblique",
-        fontSize=8,
-        leading=11,
-        textColor=colors.HexColor("#1E3A8A"),
-        backColor=colors.HexColor("#EFF6FF"),
-        borderColor=colors.HexColor("#93C5FD"),
-        borderWidth=1,
-        borderPadding=6,
-        spaceAfter=6,
-    )
-
-    table_cell = ParagraphStyle(
-        "TableCell",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=7.2,
-        leading=9.5,
-        textColor=colors.HexColor("#0F172A"),
-    )
-
-    table_cell_bold = ParagraphStyle(
-        "TableCellBold",
-        parent=table_cell,
-        fontName="Helvetica-Bold",
-    )
-
-    table_header = ParagraphStyle(
-        "TableHeader",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=7.5,
-        leading=10,
-        textColor=colors.white,
-    )
-
+    thrust, gf = p.estimate_static_thrust()
+    figures = make_figures(ROOT / "scripts" / "diagrams")
     story = []
+    page_count = 20
+    doc = StudyDoc(output_path, page_count)
 
-    # ==========================================================================
-    # PAGE 1: TITLE, INTRO FOR FRESHMEN, & SYMBOL NOMENCLATURE TABLE
-    # ==========================================================================
-    story.append(Paragraph("Aero-Mathematical Propeller Design Manual", title_style))
-    story.append(Paragraph("From First Aerodynamic Principles to Watertight ISO 10303-21 CAD B-Rep Solids // Clockwise (CW) Standard", subtitle_style))
-    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#2563EB"), spaceAfter=8))
+    def text(value, style="body"):
+        story.append(paragraph(value, sheet[style]))
 
-    story.append(Paragraph("1. Purpose & How a Propeller Works (Freshman Primer)", h1_style))
-    story.append(Paragraph(
-        "Welcome to the physics and mathematics of aerial propulsion! To a beginner, a propeller looks like a twisted decorative fan. "
-        "In reality, a propeller is a <b>rotating wing system</b>. Just as an airplane wing slices forward through air to create upward Lift, "
-        "each propeller blade rotates through the air and creates aerodynamic Lift directed <b>forward along the shaft axis</b>. "
-        "We call that forward aerodynamic force <b>Thrust ($T$)</b>. By Newton's Third Law (Action-Reaction), the blade pushes a continuous stream "
-        "of fluid backward toward downstream ($-Z$); the equal and opposite reaction pushes the propeller forward toward upstream ($+Z$).",
-        body_style
-    ))
+    def heading(number, title):
+        if number > 1:
+            story.append(PageBreak())
+        item = paragraph(title, sheet["cover"] if number == 1 else sheet["chapter"])
+        item.chapter_id = f"chapter-{number}"
+        item.chapter_title = title.replace("<br/>", " ")
+        story.append(item)
 
-    story.append(Paragraph("2. Demystifying Essential Engineering Jargon", h1_style))
-    jargon = [
-        ("Chord (c):", "The straight line distance from the front tip (Leading Edge) to the sharp back tail (Trailing Edge) of a blade slice."),
-        ("Camber (m, p):", "The curvature of the blade's central spine. An arched (cambered) surface deflects air downward/backward, generating lift even at zero physical inclination."),
-        ("Pitch (P):", "The theoretical linear distance the propeller would screw forward into solid wood during one complete 360° turn."),
-        ("Helix Angle (β):", "The physical twist angle of the blade cross-section relative to the plane of rotation, calculated as $\\beta(r) = \\arctan(P / 2\\pi r)$."),
-        ("Angle of Attack (α):", "The acute angle between the oncoming relative wind $V_{rel}$ and the blade chord line. Lift is directly proportional to $\\alpha$ until stall."),
-        ("B-Spline & Lofting:", "A smooth parametric curve governed by polynomial control points. 'Lofting' smoothly skins a series of 2D B-spline station ribs into a watertight 3D solid."),
-        ("CFD Rotating Region:", "In Computational Fluid Dynamics, the propeller volume is placed inside a cylindrical 'Multiple Reference Frame' (MRF) rotating zone to simulate airflow."),
+    def section(title):
+        text(title, "section")
+
+    def eq(value, size=14):
+        story.append(Equation(value, size=size))
+
+    def grid(rows, widths):
+        story.append(table(rows, widths, sheet))
+
+    def figure(key, caption, height=None):
+        image = Image(str(figures[key]))
+        # Resolve lazy image metadata before assigning the final print dimensions.
+        natural_width, natural_height = image.imageWidth, image.imageHeight
+        image.drawWidth = WIDTH
+        image.drawHeight = height or WIDTH * natural_height / natural_width
+        story.append(image)
+        text(caption, "small")
+
+    def symbol(value):
+        return Equation(value, size=12, width=72, boxed=False)
+
+    # Each chapter is deliberately one page; page positions are checked after build.
+    heading(1, "Understand your<br/>propeller")
+    text("A practical guide to the geometry, airflow and CAD behind Propeller Maker.", "deck")
+    text("Start with the physical picture, then follow one blade section from a few numbers to a closed solid. "
+         "Every numerical example uses the same 10 × 4.5 inch, two-blade clockwise benchmark as the app.")
+    grid([["Diameter", "Pitch", "Blades", "Rotation"],
+          ["254.0 mm", "114.3 mm", "2", "Clockwise"]], [125, 125, 90, WIDTH - 340])
+    section("Three ideas to keep in mind")
+    text("<b>A propeller is a rotating wing.</b> Its sections create aerodynamic forces; their combined axial component is thrust.")
+    text("<b>Pitch is a distance.</b> The blade angle changes from root to tip even when geometric pitch is constant.")
+    text("<b>A valid CAD solid is a starting point.</b> Geometry checks and a thrust estimate answer different questions. "
+         "Neither is a measured performance or structural test.")
+    section("Choose your route")
+    grid([["If you want to...", "Read"],
+          ["Use the app and export a model", '<link href="#chapter-2" color="#1B6C80">Page 2</link>, then pages 12-13'],
+          ["Understand the shape without advanced maths", '<link href="#chapter-5" color="#1B6C80">Pages 5-8</link>'],
+          ["Follow the equations into 3D", '<link href="#chapter-9" color="#1B6C80">Pages 9-11</link>, then page 16'],
+          ["Interpret thrust and prepare for CFD", '<link href="#chapter-14" color="#1B6C80">Pages 14-18</link>'],
+          ["Look up a symbol or practise", "Pages 3-4 and 19"]], [WIDTH - 174, 174])
+    text("The guide describes the current source code, including its modelling choices and limits. "
+         "Equations and symbol cells are vector artwork; body fonts are embedded. References and regeneration instructions are on page 20.", "small")
+
+    heading(2, "From inputs to a STEP file")
+    text("You control three physical quantities: diameter, pitch and blade count. The hub, bore, thickness, section shapes and twist are derived automatically.")
+    section("1. Set dimensions")
+    text("Choose <b>mm</b> or <b>in</b>, enter a diameter and geometric pitch, and select 2-8 blades. "
+         "Changing units converts the display; it does not resize the underlying design. Clockwise rotation is fixed.")
+    eq(r"1\ \mathrm{in}=25.4\ \mathrm{mm},\qquad P/D=114.3/254=0.450")
+    text("Read 10 × 4.5 in as a 10 inch diameter and a 4.5 inch geometric pitch. "
+         "The second number is not the hub diameter, blade width or measured distance travelled through air.")
+    section("2. Inspect the result")
+    text("Select <b>Update preview</b> after changing dimensions. The app can display edited parameters while the previous solid is still visible; "
+         "the status message tells you when a preview update is needed. Drag to orbit, right-drag to zoom, or use Isometric, Top, Front and Side.")
+    text("<b>Hub dimensions</b> gives the mounting sizes. Expand <b>Engineering details</b> for the pitch ratio, pitch angles, swept area, "
+         "thrust estimate and validation details. Expand <b>Blade profiles</b> to see chord and twist distributions.")
+    section("3. Export")
+    text("Select <b>Export STEP</b>, choose a location, and wait for the exported status. The worker generates or reuses the matching solid, "
+         "writes a temporary STEP file, imports it again, validates it, and only then replaces the chosen output.")
+    grid([["You receive", "What it contains"],
+          [".step / .stp", "The geometric boundary of a connected solid, suitable for import into CAD or meshing tools."],
+          ["You do not receive", "A CFD solution, pressure field, material, motor model, torque curve or stress result."]], [105, WIDTH - 105])
+    section("Useful input checks")
+    text("Diameter and pitch must be finite and positive; the diameter must exceed the minimum 12 mm hub diameter. "
+         "A pitch/diameter ratio outside 0.2-2.5 raises a UI warning. That warning is guidance, not an aerodynamic pass/fail test.")
+    text("Keep the project folder together: the launchers, local Python environment, source and bundled fonts are used from that folder.", "small")
+
+    heading(3, "Geometry symbols and units")
+    text("A symbol is a short label for a quantity. The same letter in a different case can mean something else: uppercase P is pitch; lowercase p is a camber-position fraction.")
+    rows = [["Symbol", "Meaning in this guide", "Units"]]
+    for name, meaning, units in [
+        ("D", "Propeller diameter: the nominal tip-to-tip dimension.", "mm or m"),
+        ("R", "Tip radius, measured from the shaft centre; R = D/2.", "mm or m"),
+        ("P", "Geometric pitch: ideal screw advance per revolution.", "mm or m"),
+        ("B", "Number of blades; the app accepts integers 2-8.", "none"),
+        ("r", "Local radius from the shaft axis to one blade station.", "mm or m"),
+        (r"\xi", "xi: radius divided by tip radius, r/R.", "none"),
+        ("c(r)", "Chord: width of an airfoil section before 3D placement.", "mm or m"),
+        (r"\beta(r)", "beta: local geometric pitch angle to the rotation plane.", "rad / deg"),
+        ("d_h", "Outer hub diameter; hub radius is d_h/2.", "mm"),
+        ("d_b", "Diameter of the open shaft bore through the hub.", "mm"),
+        ("H", "Hub thickness along the shaft axis.", "mm"),
+        (r"r_{\mathrm{embed}}", "Buried starting radius of the blade, inside the hub.", "mm"),
+        (r"z_{\mathrm{extent}}", "Largest absolute axial extent of the buried neck.", "mm"),
+        ("A", "Swept disk area, pi times the square of the tip radius.", "m²"),
+    ]:
+        rows.append([symbol(name), meaning, units])
+    grid(rows, [88, WIDTH - 162, 74])
+    section("Two conversions that prevent large mistakes")
+    eq(r"R_{\mathrm{m}}=R_{\mathrm{mm}}/1000,\qquad A_{\mathrm{m^2}}=A_{\mathrm{mm^2}}\times10^{-6}")
+    text("Geometry is stored in millimetres. Aerodynamic force calculations use metres, seconds and kilograms. "
+         "Do not put a radius in millimetres into a formula that expects metres.")
+
+    heading(4, "Airfoil and airflow symbols")
+    rows = [["Symbol", "Meaning; read the Greek name aloud", "Units"]]
+    for name, meaning, units in [
+        ("m,p,t", "NACA maximum camber, camber position and thickness ratio.", "fractions"),
+        ("u", "Normalized chord position, 0 at leading edge and 1 at trailing edge; called xc in code.", "none"),
+        (r"y_c,y_t", "Mean camber ordinate and half-thickness, divided by chord.", "none"),
+        (r"\theta_c", "theta-c: local angle of the mean camber line.", "rad"),
+        (r"\hat{x},\hat{y}", "Section coordinates divided by chord; x is centred at quarter-chord.", "none"),
+        ("X,Y,Z", "Final Cartesian point coordinates; +Z is upstream.", "mm"),
+        (r"\Omega", "omega: angular speed; 2 pi times RPM divided by 60.", "rad/s"),
+        ("n", "Rotation rate in revolutions per second, not RPM.", "1/s"),
+        (r"\phi", "phi: angle of the effective inflow to the rotation plane.", "rad / deg"),
+        (r"\alpha", "alpha: angle of attack; geometric pitch angle minus inflow angle.", "rad / deg"),
+        (r"\rho", "rho: air density; estimator default is 1.225.", "kg/m³"),
+        (r"C_L,C_D", "Section lift and drag coefficients used in the estimator.", "none"),
+        (r"F,\sigma", "Tip-loss factor; solidity is total local blade chord / circumference.", "none"),
+        ("T,dT", "Total thrust and the small contribution of one radial strip; dr is strip width (metres).", "N"),
+        (r"Re,C_T", "Reynolds number and propeller thrust coefficient.", "none"),
+        (r"\mu", "mu: dynamic viscosity of air.", "kg/(m s)"),
+        (r"V", "Speeds: Vrot is rotational, Veff effective and Vrel relative to a section.", "m/s"),
+        (r"\alpha_0", "alpha-zero: the assumed zero-lift angle.", "rad / deg"),
+        (r"\vartheta_k", "theta-k: cosine-sampling angle; k is the sample index.", "rad"),
+    ]:
+        rows.append([symbol(name), meaning, units])
+    grid(rows, [88, WIDTH - 162, 74])
+    text("Angles inside trigonometric functions use radians. Multiply radians by 180/pi to display degrees. "
+         "A hat denotes a normalized coordinate; a subscript identifies a location or quantity. dT is a differential force, not diameter multiplied by thrust.", "small")
+
+    heading(5, "A consistent clockwise convention")
+    text("Clockwise depends on which side you look from. This program defines it from the upstream side: "
+         "look from <b>+Z toward -Z</b>, as though the shaft points toward your eye.")
+    figure("coordinates", "Figure 1. The observer, axes, blade motion and thrust use one convention. The drawing shows directions, not a computed airflow field.")
+    section("Follow a blade at the top of the disk")
+    text("At the +Y position, a clockwise-moving blade travels toward +X. Its leading edge must therefore lie ahead of its trailing edge in X. "
+         "The pitched section also places that leading edge farther upstream in Z.")
+    eq(r"X_{\mathrm{LE}}>X_{\mathrm{TE}},\qquad Z_{\mathrm{LE}}>Z_{\mathrm{TE}}")
+    text("The upper, suction-side surface is on the +Z side of the section. The engine provides a dedicated orientation check that compares "
+         "leading/trailing edges and upper/lower points near quarter-chord at each analytical station. "
+         "That standalone check is separate from the app's per-export topology validation.")
+    section("Force and flow point in opposite directions")
+    text("In the intended operating direction, the propeller accelerates air downstream toward -Z; the reaction thrust on the propeller is toward +Z. "
+         "The words upper and lower describe the section's two surfaces; they are not a promise about the world's vertical direction after a blade rotates.")
+    section("Why this matters during import")
+    text("Keep the same shaft direction and viewing convention in another CAD or CFD tool. A visually plausible model can be assigned the wrong angular-velocity sign. "
+         "Always check a point on +Y: does the chosen rotation move it toward +X?")
+    text("Geometry orientation does not by itself establish the amount of thrust. That requires a flow calculation or measurement, with matching operating conditions.", "small")
+
+    heading(6, "Pitch is distance. Twist is angle.")
+    text("Imagine replacing air with a material in which the blade behaves like a screw without slip. One revolution would advance by P. "
+         "Unroll the circular path at radius r: the horizontal distance is its circumference and the vertical distance is the pitch.")
+    figure("helix", "Figure 2. Unrolling a helix gives a right triangle. A larger radius makes the base longer while P stays constant.")
+    eq(r"\tan\beta=\frac{P}{2\pi r},\qquad \beta(r)=\arctan\left(\frac{P}{2\pi r}\right)")
+    text("<b>Read it as:</b> divide the pitch by the circumference, then take the inverse tangent. Use the same length unit for both.")
+    grid([["Location", "Radius", "Pitch angle"],
+          ["Hub edge, 0.10R", "12.70 mm", f"{p.root_pitch_deg:.2f}°"],
+          ["Half span, 0.50R", "63.50 mm", "15.99°"],
+          ["Tip, 1.00R", "127.00 mm", f"{p.tip_pitch_deg:.2f}°"]], [WIDTH - 220, 110, 110])
+    section("Worked example at half span")
+    eq(r"\beta=\arctan\left(\frac{114.3}{2\pi\times63.5}\right)=15.99^{\circ}")
+    text("Air is not a solid screw thread, so the actual advance per revolution can differ from P. "
+         "Constant geometric pitch also does not guarantee constant angle of attack, because the inflow angle varies with the operating condition.")
+    text("Inside the root blend, the code limits pitch angle to 65°. At the benchmark embedded root (8.89 mm), it is 63.96°; "
+         "the UI's root-pitch readout refers to the 12.70 mm hub edge, not that buried start.", "small")
+
+    heading(7, "Reading chord and thickness")
+    text("The blade's outline and twist are different distributions. Chord describes its width; pitch angle describes its rotation out of the disk plane. "
+         "The program prescribes both rather than optimizing them for a chosen motor or mission.")
+    figure("distributions", "Figure 3. Actual benchmark distributions from the current engine. The widest nominal section is at half span.")
+    grid([["Radius / R", "Chord / D", "Chord at D = 254 mm"],
+          ["0.07 (embedded root)", "0.027", "6.858 mm"],
+          ["0.22 (transition)", "0.072", "18.288 mm"],
+          ["0.50", "0.155", "39.370 mm"],
+          ["0.75", "0.115", "29.210 mm"],
+          ["0.96", "0.040", "10.160 mm"],
+          ["0.99", "0.023", "5.842 mm"],
+          ["1.00 (nominal tip section)", "0.015", "3.810 mm"]], [WIDTH - 280, 100, 180])
+    text("A shape-preserving cubic interpolator (PCHIP) connects these design anchors [4]. "
+         "The transition location is derived from the root proportions; it is 0.22R for this benchmark.")
+    section("Thickness ratio is not an absolute thickness")
+    text("The embedded root starts at 13% chord, decreases to 12% at the transition, and then tapers to 8.5% at the tip. "
+         "Multiply the local chord by the local ratio to estimate maximum section thickness. The exact surface normal geometry sets the detailed value.")
+    text("The final CAD tip is rounded to an apex over a short cap region. The nominal chord at 1.00R is a construction section, not a flat exposed 3.810 mm end face.", "small")
+
+    heading(8, "What a NACA section means")
+    text("An <b>airfoil</b> is a blade sliced at one radius. A NACA four-digit section combines a curved mean line with a thickness distribution [1]. "
+         "The familiar name 4412 means 4% maximum camber, located at 40% chord, and 12% maximum thickness.")
+    figure("airfoil", "Figure 4. A 12% benchmark section at the transition. The camber line is the midpoint between the two surfaces; the chord is the straight LE-to-TE reference.")
+    grid([["Feature", "What to notice"],
+          ["Leading edge (LE)", "The rounded nose meets the incoming relative airflow."],
+          ["Trailing edge (TE)", "The two surfaces meet at the closed rear edge."],
+          ["Camber line", "Its maximum ordinate is 0.04 times the chord, at u = 0.40."],
+          ["Quarter-chord reference", "Subtracting 0.25 from normalized x moves the coordinate origin; it does not change the airfoil shape."]], [125, WIDTH - 125])
+    section("The program uses a family of related sections")
+    text("The camber parameters stay at m = 0.04 and p = 0.40, while thickness changes along the span. "
+         "It is more precise to call the result a NACA 44-series-inspired varying-thickness blade than a constant 4412 section everywhere.")
+    section("What camber tells you - and what it does not")
+    text("Camber changes the lift curve and zero-lift angle. It can produce lift at zero geometric angle of attack. "
+         "It does not guarantee attached flow: Reynolds number, roughness, incidence, transition and operating conditions still matter. "
+         "The section geometry alone is not a measured lift/drag polar.")
+
+    heading(9, "Build a section with equations")
+    text("All coordinates on this page are divided by the local chord. Let u run from 0 at the nose to 1 at the trailing edge. "
+         "The thickness function gives <b>half</b> the distance between the surfaces, measured normal to the camber line.")
+    eq(r"y_t=5t\left(0.2969\sqrt{u}-0.1260u-0.3516u^2+0.2843u^3-0.1036u^4\right)", size=13)
+    text("The final coefficient is the program's closed-trailing-edge modification. The code explicitly sets the endpoint thickness to zero. "
+         "A finite-thickness trailing edge can also form valid CAD when capped appropriately; it is not inherently non-manifold.")
+    section("Mean camber: one expression on each side of p")
+    text("The prime in y'c means the derivative: the local slope of the mean camber line.", "small")
+    eq(r"u<p:\quad y_c=\frac{m}{p^2}(2pu-u^2),\qquad y'_c=\frac{2m}{p^2}(p-u)")
+    eq(r"u\geq p:\quad y_c=\frac{m}{(1-p)^2}(1-2p+2pu-u^2)", size=13)
+    eq(r"u\geq p:\quad y'_c=\frac{2m}{(1-p)^2}(p-u),\qquad \theta_c=\arctan(y'_c)")
+    text("The slope angle tells us how to offset the upper and lower surfaces perpendicular to the curved mean line. "
+         "The subtraction of 0.25 below centres the x coordinate at quarter-chord.")
+    eq(r"\hat{x}_u=u-y_t\sin\theta_c-0.25,\qquad \hat{y}_u=y_c+y_t\cos\theta_c", size=13)
+    eq(r"\hat{x}_l=u+y_t\sin\theta_c-0.25,\qquad \hat{y}_l=y_c-y_t\cos\theta_c", size=13)
+    section("Sampling is about resolving curvature")
+    eq(r"u_k=\frac{1-\cos\vartheta_k}{2},\qquad 0\leq\vartheta_k\leq\pi")
+    text("Cosine spacing puts more points near both ends than uniform chordwise spacing. "
+         "With 60 sample points per surface, 15 lie in the first 15% chord. The joined outline contains 118 unique points before an optional repeated closing point.", "small")
+
+    heading(10, "From 2D section to 3D station")
+    text("Each section is scaled by chord and pitched at a chosen radius. The <b>production CAD uses planar radial sections</b>: "
+         "every point of the unrotated section has the same Y coordinate. The source also contains a cylindrical-wrap helper, but that helper is not the active section-building path.")
+    figure("stations", "Figure 5. Selected actual analytical stations before CAD tip remapping. Each closed curve is a rib; the loft fills the surface between ribs.")
+    eq(r"x_s=c\hat{x},\qquad y_s=c\hat{y}")
+    eq(r"s=-x_s\cos\beta-y_s\sin\beta+\operatorname{sweep}(\xi)")
+    eq(r"z_0=-x_s\sin\beta+y_s\cos\beta,\qquad (X,Y,Z)=(s,r,z)")
+    text("The minus signs orient the leading edge toward +X and +Z for the chosen CW convention. "
+         "A small prescribed tangential sweep changes X. In the buried root region, an axial centring offset changes z from z0 so the section fits between the hub faces.")
+    text("Here s is the tangential coordinate, z0 the axial coordinate before centring, and z the final axial coordinate; all three are in millimetres.", "small")
+    section("How the radial ribs are chosen")
+    text("The default has 22 base stations. Root, hub edge, transition and 0.96R/0.99R/1.00R are explicit anchors. "
+         "Additional stations are chosen from cosine-spaced candidates by filling the largest gaps. These are geometry samples, not CFD mesh cells.")
+    text("The CAD generator slightly compresses the station Y positions to reserve the terminal cap region. "
+         "The analytical distributions and station drawing describe the design before that final cap construction.", "small")
+
+    heading(11, "A hub that contains the root")
+    text("The hub is the central mounting body. Its bore must remain open after blades are joined to it. "
+         "The current app derives these sizes; it does not offer independent bore or hub controls.")
+    figure("hub", "Figure 6. Axial section of the benchmark hub. The open shaft bore runs through its full thickness; the drawing omits small edge chamfers.")
+    eq(r"d_h=\max(12\ \mathrm{mm},0.10D),\qquad d_b=0.45d_h")
+    eq(r"r_{\mathrm{embed}}=0.70(d_h/2)")
+    eq(r"H=\max\left(0.036D,\ 1.15\times2z_{\mathrm{extent}}\right)")
+    text("The extent is the largest absolute axial coordinate found while sampling the buried neck from the embedded root to the hub edge. "
+         "Twice that extent gives a symmetric envelope; the factor 1.15 adds clearance. The other term keeps a minimum proportional hub thickness.")
+    grid([["For the benchmark", "Calculation", "Result"],
+          ["Hub diameter", "0.10 × 254", "25.400 mm"],
+          ["Bore diameter", "0.45 × 25.4", "11.430 mm"],
+          ["Hub thickness", f"max(9.144, {1.15 * 2 * engine.root_axial_extent_mm():.3f})", f"{p.hub_length_mm:.3f} mm"]],
+         [160, WIDTH - 265, 105])
+    text("The bore is cut <b>after</b> all blade unions. This removes any blade material that would otherwise obstruct the mounting hole. "
+         "A rim chamfer and a root fillet are attempted only when the kernel can make a valid result; they are not guaranteed features.", "small")
+
+    heading(12, "How the CAD solid is built")
+    text("A boundary representation (B-Rep) stores surfaces, edges, vertices and their connections. "
+         "The on-screen triangle mesh is a rendering of that solid; the STEP file stores the CAD representation [5, 6].")
+    grid([["Stage", "Construction and reason"],
+          ["1. Close each rib", "Fit one spline from TE to LE on the upper surface and one from LE back to TE on the lower. Join the two edges into a valid closed wire."],
+          ["2. Reserve the cap", "Compress the base-station radial positions slightly. Reserve 0.008R for the rounded terminal region, rather than leave an exposed flat tip face."],
+          ["3. Loft the blade", "Use 22 base wires, five progressively smaller cap wires and a terminal apex. The loft requests degree at most 3 and preserves consistent wire ordering."],
+          ["4. Create the hub", "Build a cylinder centred about Z = 0. Try a small rim chamfer, retaining the original hub if finishing fails."],
+          ["5. Repeat and fuse", "Rotate copies about Z, then boolean-fuse them to the hub. For B blades the angular spacing is 360/B degrees."],
+          ["6. Finish and bore", "Try a root fillet, cut the shaft bore through the joined model, clean the result and validate the final connected solid."]], [105, WIDTH - 105])
+    section("Two operations that sound similar")
+    text("<b>A loft</b> creates a surface or solid through a series of section wires. <b>A boolean union</b> combines overlapping volumes. "
+         "The buried root provides overlap so a blade can connect to the hub; merely touching at a point or edge would not be a reliable volume connection.")
+    section("Why the tip has extra wires")
+    text("The cap sections shrink with a cosine factor and advance with a sine factor at construction angles of 25°, 45°, 65°, 80° and 88°, "
+         "then close at a vertex. This is an ellipsoidal-style loft closure, not a separately attached sphere. "
+         "The maximum-degree request is not a proof of global C² continuity across every face or sharp edge.")
+    text("For two blades, the copies are 180° apart. Three blades are 120° apart; four are 90° apart. "
+         "Changing blade count repeats the prescribed blade rather than designing a new optimum blade for that count.", "small")
+
+    heading(13, "What watertight really checks")
+    text("A watertight CAD solid has a closed boundary enclosing positive volume. In this program, validation asks about connectivity and topology, "
+         "then repeats the checks after importing the exported STEP file. It does not ask whether the blade will be efficient or strong.")
+    grid([["Check", "Plain-language meaning"],
+          ["One connected solid", "All blades and the hub belong to a single material volume."],
+          ["One closed shell", "The outer boundary encloses the material without an open gap."],
+          ["Kernel validity", "Both the shape API and OpenCascade's B-Rep analyzer accept the topology."],
+          ["Positive volume", "The result is a material body, not only a surface or wire."],
+          ["Edge incidence", "Ordinary boundary edges connect to two faces. A permitted zero-length pole edge is handled separately."],
+          ["STEP readback", "The temporary exported file can be reimported and passes the same solid checks."],
+          ["Bore and hub audit", "The benchmark verification script additionally probes bore clearance, hub faces, embedded roots and tip compactness."]], [125, WIDTH - 125])
+    section("Why the save operation uses a temporary file")
+    text("Export is completed beside the destination, checked, and then moved into place with an atomic replacement. "
+         "If writing or readback fails, a half-written file should not replace the selected output. "
+         "The app serializes CAD work and keeps Tk operations on the main thread.")
+    section("A clear division of evidence")
+    text("<b>Preview:</b> helps you see shape and orientation. <b>Topology audit:</b> establishes a valid connected geometric boundary. "
+         "<b>CFD or experiment:</b> estimates or measures performance. <b>Structural analysis and testing:</b> address loads, materials and failure. "
+         "Passing one does not automatically pass the others.")
+    text("The extra benchmark audit is available as: <font name='PlexMono'>python verify_geometry.py</font>. "
+         "It writes its generated STEP and JSON report under work/ by default.", "small")
+
+    heading(14, "The airflow seen by a blade")
+    text("A blade section moves tangentially, while air also moves through the propeller disk. "
+         "The section responds to the <b>relative airflow</b>, not simply to the air's speed relative to the room.")
+    eq(r"\Omega=\frac{2\pi\,\mathrm{RPM}}{60},\qquad V_{\mathrm{rot}}=\Omega r")
+    section("Pitch angle and angle of attack are different")
+    eq(r"\alpha=\beta-\phi")
+    text("Beta is built into the geometry. Phi describes the effective inflow direction. Alpha is the difference between the chord direction and that inflow. "
+         "For example, a 16° pitch angle with 10° inflow gives 6° angle of attack. The 10° is an illustrative operating condition, not a fixed value in the CAD model.")
+    section("At the benchmark speed of 6,000 RPM")
+    grid([["Quantity", "Calculation", "Result"],
+          ["Turns per second", "6,000 / 60", "100 1/s"],
+          ["Angular speed", "2 pi × 100", "628.32 rad/s"],
+          ["Half-span tangential speed", "628.32 × 0.0635", "39.90 m/s"],
+          ["Tip tangential speed", "628.32 × 0.127", "79.80 m/s"]], [180, WIDTH - 285, 105])
+    text("The tip travels faster because it covers a larger circumference in the same revolution. "
+         "That is one reason blade sections are twisted. The helical-pitch rule supplies a geometric relationship; actual aerodynamic loading still depends on inflow and the section polar.")
+    section("Reynolds number explains why scale matters")
+    eq(r"Re=\frac{\rho V_{\mathrm{rel}}c}{\mu}")
+    text("Reynolds number compares inertial and viscous effects. Here mu is dynamic viscosity in kg/(m s). "
+         "Speed and chord change across the blade, so Reynolds number changes too. UIUC experiments document these effects for small propellers [2, 3]. "
+         "This app's simple lift/drag law is not a Reynolds-dependent lookup table.")
+
+    heading(15, "How the thrust estimate works")
+    text("The app uses a simplified static blade-element/momentum calculation. Think of the disk as narrow radial strips. "
+         "For each strip, estimate the local inflow and section force, then add the strips. Static means no imposed forward flight speed.")
+    eq(r"\sigma=\frac{Bc}{2\pi r},\qquad \alpha=\beta-\phi")
+    text("Solidity sigma is the total blade chord divided by the circumference at that radius. "
+         "The code assumes a zero-lift angle of -3.8°, applies a lift-slope factor of 0.95, limits lift, and estimates drag from lift:")
+    eq(r"C_L=\mathrm{clip}\!\left[2\pi(0.95)(\alpha-\alpha_0),-0.5,1.35\right]", size=13)
+    eq(r"\alpha_0=-3.8^{\circ},\qquad C_D=0.012+0.045C_L^2")
+    text("Clip means keep the result within the two stated limits. The tip-loss factor F reduces the idealized loading near the blade ends. "
+         "Inflow is updated through a relaxed annular balance:")
+    eq(r"4F\sin^2\phi=\sigma(C_L\cos\phi-C_D\sin\phi)")
+    text("The implementation samples 60 uniformly spaced radii from the hub edge to 0.995R and performs 30 relaxed inflow updates per radius. "
+         "It clips intermediate values for numerical stability; it does not stop on a measured convergence tolerance.")
+    eq(r"dT=B\,\frac{1}{2}\rho V_{\mathrm{eff}}^2c(C_L\cos\phi-C_D\sin\phi)\,dr", size=13)
+    eq(r"V_{\mathrm{eff}}=\frac{\Omega r}{\cos\phi},\qquad T\approx\sum dT")
+    text("<b>Read the force equation:</b> dynamic pressure times chord times strip width gives a force scale; "
+         "the bracket projects lift and drag along the shaft; B includes all blades. "
+         "The default density is 1.225 kg/m³. Geometry uses millimetres, but this calculation converts lengths to metres.", "small")
+
+    heading(16, "A worked section, end to end")
+    text("Take the benchmark section at half span, then locate one point on its upper surface. "
+         "This example connects the symbol table, airfoil formula and 3D placement; it is not a new design rule.")
+    section("1. Locate the section")
+    eq(r"\xi=0.50,\quad r=0.50(127)=63.5\ \mathrm{mm},\quad c=0.155(254)=39.37\ \mathrm{mm}", size=12.5)
+    text("At this radius the current engine gives beta = 15.9859° and thickness ratio t = 0.1097075. "
+         "The local sweep is 1.906568 mm, and the root-centring correction has already faded to zero.")
+    section("2. Evaluate the airfoil at u = 0.40")
+    text("This is the maximum-camber position: the camber-line slope is zero, so theta-c is zero. "
+         "Substituting into the thickness polynomial and upper-surface formula gives:")
+    eq(r"y_c=0.04,\quad y_t=0.05302333,\quad \hat{x}_u=0.40-0.25=0.15", size=13)
+    eq(r"\hat{y}_u=0.04+0.05302333=0.09302333")
+    section("3. Multiply by the local chord")
+    eq(r"x_s=39.37(0.15)=5.9055\ \mathrm{mm}")
+    eq(r"y_s=39.37(0.09302333)=3.662329\ \mathrm{mm}")
+    section("4. Pitch, sweep and place the point")
+    eq(r"X=-5.9055\cos\beta-3.662329\sin\beta+1.906568")
+    eq(r"Y=63.5,\qquad Z=-5.9055\sin\beta+3.662329\cos\beta")
+    text("<b>Result:</b> upper-surface point (X, Y, Z) = <b>(-4.779171, 63.500000, 1.894326) mm</b>. "
+         "The matching lower-surface point at the same u is (-3.629358, 63.500000, -2.119280) mm.")
+    text("Do not confuse this point's 4.175057 mm surface separation with the section's maximum thickness. "
+         "It is one local chordwise sample. The loft fits the complete closed outline at many radii.", "small")
+
+    heading(17, "Interpret the numbers honestly")
+    text("For the default 254 mm / 114.3 mm / two-blade design at 6,000 RPM and the default air density, "
+         "the current estimator returns the values below. These are reproducible outputs of its assumed model, not a measured rating.")
+    grid([["Readout", "Benchmark value", "Meaning"],
+          ["Estimated static thrust", f"{thrust:.4f} N", "Axial force predicted by this estimator."],
+          ["Grams-force equivalent", f"{gf:.1f} gf", "A force conversion, not the propeller's mass."],
+          ["Pitch / diameter", f"{p.pitch_to_diameter_ratio:.3f}", "A geometry ratio, not efficiency."],
+          ["Swept disk area", f"{p.disk_area_m2:.5f} m²", "Area enclosed by the nominal tip radius."]], [160, 115, WIDTH - 275])
+    eq(r"1\ \mathrm{gf}=0.00980665\ \mathrm{N},\qquad 6.377726\ \mathrm{N}\approx650.35\ \mathrm{gf}", size=13)
+    section("A coefficient helps compare propellers")
+    eq(r"C_T=\frac{T}{\rho n^2D^4},\qquad n=\mathrm{RPM}/60")
+    ct = thrust / (1.225 * 100 ** 2 * .254 ** 4)
+    text(f"With diameter in metres and n = 100 revolutions/s, the estimated static thrust coefficient is {ct:.4f}. "
+         "Use the same definition, propeller geometry, rotation speed and test condition when comparing data. "
+         "A coefficient computed from an estimate remains an estimate [2].")
+    section("What this estimator leaves out")
+    text("It has no measured Reynolds-dependent polar table, induced-swirl solution, torque/power prediction, "
+         "forward-flight input, motor/ESC model, acoustic model or structural calculation. "
+         "Its lift limit is a numerical approximation to stall behaviour, not a complete stall model.")
+    text("The 6.38 N result is useful for a first consistency check. The repository does not supply a matched test report proving this exact CAD geometry agrees with UIUC measurements. "
+         "UIUC data are a reference for how to test and compare, rather than certification of this generated blade [2, 3].")
+
+    heading(18, "Taking the model into CAD or CFD")
+    section("Start by checking scale and axes")
+    text("Import the STEP into your downstream tool and measure a known dimension such as the 25.4 mm hub diameter or 11.43 mm bore. "
+         "Confirm the shaft axis, upstream +Z direction and intended CW motion. A scale or sign error can overwhelm a sophisticated calculation.")
+    section("The solid and the fluid are different regions")
+    text("The exported propeller is the <b>solid</b>. A CFD airflow domain is a surrounding fluid volume with the propeller volume removed. "
+         "Its outer boundaries, rotating region and mesh must be created in the CFD tool. The app does not export that fluid setup.")
+    grid([["Step", "What you decide downstream"],
+          ["Operating condition", "Rotation speed, static or forward flow, density, viscosity and reference frame."],
+          ["Fluid domain", "Extent of upstream, downstream and lateral regions; demonstrate domain independence rather than assume one universal size."],
+          ["Rotor treatment", "A rotating-reference-frame approximation or a transient sliding-mesh setup, depending on the question."],
+          ["Mesh", "Resolve the leading edge, closed trailing edge, root, tip and wake; use appropriate wall treatment."],
+          ["Evidence", "Check residuals, force history, mass balance, mesh/time-step independence and comparison with relevant data."]], [112, WIDTH - 112])
+    section("Compare the quantity you actually calculated")
+    text("Integrate pressure and viscous forces on the blade/hub surfaces, then project the result along the chosen shaft direction. "
+         "Compare a static CFD condition with the static estimator; do not compare it directly with a forward-flight operating point.")
+    section("For manufacturing or structural work")
+    text("A STEP shape contains geometry, not a material specification, process tolerance or balance result. "
+         "Mounting fit, finite edge thickness, strength, vibration and manufacturing constraints need their own assessment. "
+         "The application's topology audit establishes geometry integrity and leaves those separate engineering questions open.")
+
+    heading(19, "Questions, checks and practice")
+    for question, answer in [
+        ("Why does the blade flatten toward the tip?", "The circumference grows with radius while geometric pitch stays fixed. The ratio P/(2 pi r) decreases, so the helix angle decreases."),
+        ("Is the root-pitch readout the angle at the very first rib?", "No. It is evaluated at the hub edge (12.70 mm here). The buried starting rib is at 8.89 mm and has a larger angle."),
+        ("Why is the bore not editable?", "It is derived as 45% of hub diameter in the current model. Changing diameter changes the derived mounting sizes; this is not an independent hardware selection."),
+        ("Why did changing units not change the preview?", "A correct unit conversion describes the same dimensions. The canonical lengths remain in millimetres."),
+        ("Why is an old preview still present after an edit?", "Edits update the readouts first. Use Update preview to rebuild the solid; the caption describes the model currently shown."),
+        ("Why can export fail with positive dimensions?", "Positive inputs pass the first checks, but unusual shapes can still fail a loft, union or topology check. Read the error and the project's propeller_error.log; do not treat a partially generated file as a successful export."),
+    ]:
+        section(question)
+        text(answer)
+    section("Try these before reading the answers")
+    text("<b>A.</b> Convert a 9 inch diameter to mm and find its radius.")
+    text("<b>B.</b> At r = 127 mm, double the benchmark pitch and calculate beta.")
+    text("<b>C.</b> If beta = 20° and phi = 12°, find alpha.")
+    text("<b>D.</b> How far apart are five blades?")
+    text("<b>Answers:</b> A: D = 228.6 mm, R = 114.3 mm. B: arctan(228.6/(2 pi × 127)) = 15.99°, "
+         "which is not exactly twice the original angle. C: 8°. D: 360/5 = 72°.", "small")
+
+    heading(20, "Sources and a reproducible guide")
+    text("The equations and examples were checked against this project's implementation. "
+         "The external sources explain the background or APIs; they do not certify the generated propeller.")
+    references = [
+        ("1. Jacobs, Ward and Pinkerton (1933). NACA Report 460.",
+         "The Characteristics of 78 Related Airfoil Sections from Tests in the Variable-Density Wind Tunnel. Background for NACA four-digit shape definitions.",
+         "https://ntrs.nasa.gov/citations/19930091108"),
+        ("2. UIUC Propeller Data Site.",
+         "Wind-tunnel propeller measurements and coefficient definitions. Use a matching geometry and operating condition for any comparison.",
+         "https://m-selig.ae.illinois.edu/props/propDB.html"),
+        ("3. Brandt and Selig (2011), AIAA 2011-1255.",
+         "Propeller Performance Data at Low Reynolds Numbers. Primary experimental context for small-propeller performance.",
+         "https://m-selig.ae.illinois.edu/pubs/BrandtSelig-2011-AIAA-2011-1255-LRN-Propellers.pdf"),
+        ("4. SciPy PchipInterpolator documentation.",
+         "The shape-preserving piecewise cubic interpolator used for the prescribed chord anchors.",
+         "https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.PchipInterpolator.html"),
+        ("5. CadQuery import/export documentation.",
+         "STEP import and export API reference.",
+         "https://cadquery.readthedocs.io/en/latest/importexport.html"),
+        ("6. OpenCascade BRepOffsetAPI_ThruSections reference.",
+         "Loft construction from ordered wires and vertices; API settings do not alone prove global smoothness.",
+         "https://dev.opencascade.org/doc/refman/html/class_b_rep_offset_a_p_i___thru_sections.html"),
     ]
-    for term, definition in jargon:
-        story.append(Paragraph(f"• <b>{term}</b> {definition}", body_style))
+    for title, description, url in references:
+        text(f"<b>{title}</b> {description} "
+             f'<link href="{url}" color="#1B6C80">Open source</link>', "small")
+    section("Find the implementation")
+    grid([["Source", "What to inspect"],
+          ["core/math_engine.py", "Parameters, profiles, stations, planar placement and static thrust estimator."],
+          ["core/cad_generator.py", "Closed wires, cap, hub, boolean operations, validation and atomic STEP export."],
+          ["verify_geometry.py", "Round-trip benchmark, bore, hub and distal-tip checks."],
+          ["ui/layout.py", "Native controls and disclosures referred to on page 2."]], [175, WIDTH - 175])
+    section("Rebuild without opening the app")
+    text("venv\\Scripts\\python.exe scripts\\generate_study_pdf.py", "code")
+    text("On Unix/macOS use the local environment's Python instead. The script reads the existing engine, "
+         "regenerates diagrams and embeds bundled Plex fonts; mathematics is drawn as PDF vector paths. "
+         "It uses the project's existing dependencies and does not install fonts or modify application logic.", "small")
 
-    story.append(Spacer(1, 4))
-    story.append(Paragraph("3. Complete Mathematical Symbol Nomenclature", h1_style))
-
-    symbols_data = [
-        [Paragraph("Symbol", table_header), Paragraph("Engineering Concept", table_header), Paragraph("Definition / Formula", table_header), Paragraph("Units", table_header)],
-        [Paragraph("<i>D</i>", table_cell_bold), Paragraph("Propeller Diameter", table_cell), Paragraph("Tip-to-tip blade outer span", table_cell), Paragraph("mm / in", table_cell)],
-        [Paragraph("<i>R</i>", table_cell_bold), Paragraph("Tip Radius", table_cell), Paragraph("<i>R = D / 2</i>", table_cell), Paragraph("mm", table_cell)],
-        [Paragraph("<i>P</i>", table_cell_bold), Paragraph("Geometric Pitch", table_cell), Paragraph("Axial advance per revolution (screw pitch)", table_cell), Paragraph("mm / in", table_cell)],
-        [Paragraph("<i>B</i>", table_cell_bold), Paragraph("Blade Count", table_cell), Paragraph("Number of rotating blades (2 to 8)", table_cell), Paragraph("integer", table_cell)],
-        [Paragraph("ξ", table_cell_bold), Paragraph("Normalized Radial Station", table_cell), Paragraph("ξ = <i>r / R</i> (from hub embed to tip)", table_cell), Paragraph("dimensionless", table_cell)],
-        [Paragraph("<i>r</i>", table_cell_bold), Paragraph("Local Radius", table_cell), Paragraph("Radial distance from shaft center axis", table_cell), Paragraph("mm / m", table_cell)],
-        [Paragraph("<i>c(r)</i>", table_cell_bold), Paragraph("Local Chord Length", table_cell), Paragraph("Width of blade cross-section at radius <i>r</i>", table_cell), Paragraph("mm / m", table_cell)],
-        [Paragraph("β(r)", table_cell_bold), Paragraph("Helix Pitch Angle", table_cell), Paragraph("β(<i>r</i>) = arctan(<i>P</i> / 2π<i>r</i>)", table_cell), Paragraph("deg / rad", table_cell)],
-        [Paragraph("<i>m, p, t</i>", table_cell_bold), Paragraph("NACA 4-Digit Parameters", table_cell), Paragraph("Max camber (4%), position (40%), thickness (12% to 8.5%)", table_cell), Paragraph("fraction of <i>c</i>", table_cell)],
-        [Paragraph("<i>x_c</i>", table_cell_bold), Paragraph("Normalized Chord Coordinate", table_cell), Paragraph("Station chordwise position (0 at LE to 1 at TE)", table_cell), Paragraph("fraction of <i>c</i>", table_cell)],
-        [Paragraph("<i>y_c(x)</i>", table_cell_bold), Paragraph("Mean Camber Function", table_cell), Paragraph("Analytical parabolic curvature distribution", table_cell), Paragraph("fraction of <i>c</i>", table_cell)],
-        [Paragraph("<i>y_t(x)</i>", table_cell_bold), Paragraph("Airfoil Thickness Envelope", table_cell), Paragraph("NACA polynomial with closed TE modification", table_cell), Paragraph("fraction of <i>c</i>", table_cell)],
-        [Paragraph("<i>s_tan</i>", table_cell_bold), Paragraph("Tangential Coordinate", table_cell), Paragraph("Blade coordinate along rotational path (+X for CW)", table_cell), Paragraph("mm", table_cell)],
-        [Paragraph("<i>z_axial</i>", table_cell_bold), Paragraph("Axial Coordinate", table_cell), Paragraph("Blade coordinate along flight shaft (+Z for thrust)", table_cell), Paragraph("mm", table_cell)],
-        [Paragraph("γ", table_cell_bold), Paragraph("Cylindrical Wrap Angle", table_cell), Paragraph("γ = <i>s_tan / r</i> (conformal mapping angle)", table_cell), Paragraph("radians", table_cell)],
-        [Paragraph("ρ", table_cell_bold), Paragraph("Fluid Air Density", table_cell), Paragraph("Standard sea-level air density = 1.225", table_cell), Paragraph("kg/m³", table_cell)],
-        [Paragraph("<i>C_L, C_D</i>", table_cell_bold), Paragraph("Lift & Drag Coefficients", table_cell), Paragraph("Aerodynamic section lift & profile drag polars", table_cell), Paragraph("dimensionless", table_cell)],
-        [Paragraph("<i>T</i>", table_cell_bold), Paragraph("Integrated Static Thrust", table_cell), Paragraph("Total forward force generated by propeller", table_cell), Paragraph("N / gf", table_cell)],
-    ]
-
-    sym_table = Table(symbols_data, colWidths=[42, 130, 290, 78])
-    sym_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2),
-        ("TOPPADDING", (0, 0), (-1, -1), 2.2),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#FFFFFF"), colors.HexColor("#F8FAFC")]),
-    ]))
-    story.append(sym_table)
-
-    story.append(PageBreak())
-
-    # ==========================================================================
-    # PAGE 2: AIRFOIL ANATOMY & ANALYTICAL CONSTRUCTION (NACA 4412)
-    # ==========================================================================
-    story.append(Paragraph("4. Airfoil Anatomy & Analytical Construction (NACA 4412)", h1_style))
-    story.append(Paragraph(
-        "Every cross-section of our propeller blade is an aerodynamically contoured lifting surface. "
-        "Small-to-medium UAV propellers operate at low Reynolds numbers ($Re = 50,000\\text{ to }150,000$), where laminar separation bubbles "
-        "threaten to stall symmetric or under-cambered sections. Our program uses the cambered <b>NACA 4412</b> section (4% max camber at 40% chord, "
-        "tapering from 12% thickness at the hub to 8.5% at the tip) to guarantee robust boundary layer attachment and a high lift coefficient ($C_L \\approx 0.8\\text{--}1.1$).",
-        body_style
-    ))
-
-    story.append(Image(str(diag1_path), width=7.4 * inch, height=2.66 * inch))
-    story.append(Spacer(1, 4))
-
-    story.append(Paragraph("Analytical Formulation (Abbott & Von Doenhoff, 1959):", h2_style))
-    story.append(Paragraph(
-        "The thickness envelope $\\pm y_t(x_c)$ is governed by the 4th-order polynomial with the <b>closed trailing-edge modification</b>: "
-        "<br/>&nbsp;&nbsp;&nbsp;&nbsp;<b>$y_t(x_c) = 5 t \\cdot [0.2969\\sqrt{x_c} - 0.1260 x_c - 0.3516 x_c^2 + 0.2843 x_c^3 - 0.1036 x_c^4]$</b> "
-        "<br/><i>Note on the $-0.1036 x_c^4$ coefficient:</i> Standard wind-tunnel NACA airfoils end in a blunt trailing edge of thickness $0.0021c$ (using $-0.1015 x_c^4$). "
-        "In CAD solids, a blunt knife-edge causes OpenCascade lofting kernels to fail topological manifold checks. Changing this coefficient to $-0.1036$ forces $y_t(1.0) = 0.0$ exactly, "
-        "producing an infinitely sharp, watertight closed trailing edge.",
-        body_style
-    ))
-
-    story.append(Paragraph(
-        "The parabolic mean camber line $y_c(x_c)$ is defined piecewise forward and aft of maximum camber position $p = 0.40$: "
-        "<br/>&nbsp;&nbsp;&nbsp;&nbsp;Forward ($x_c < p$):&nbsp;&nbsp;<b>$y_c = \\frac{m}{p^2} (2px_c - x_c^2)$</b>, &nbsp;&nbsp;$\\frac{dy_c}{dx_c} = \\frac{2m}{p^2} (p - x_c)$ "
-        "<br/>&nbsp;&nbsp;&nbsp;&nbsp;Aft ($x_c \\ge p$):&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<b>$y_c = \\frac{m}{(1-p)^2} [(1-2p) + 2px_c - x_c^2]$</b>, &nbsp;&nbsp;$\\frac{dy_c}{dx_c} = \\frac{2m}{(1-p)^2} (p - x_c)$",
-        body_style
-    ))
-
-    story.append(Paragraph(
-        "The local surface slope angle is $\\theta_c = \\arctan(dy_c / dx_c)$. The upper (suction) and lower (pressure) coordinates are projected "
-        "orthogonally from the camber line centered at the quarter-chord ($0.25c$) pitch axis: "
-        "<br/>&nbsp;&nbsp;&nbsp;&nbsp;Upper Surface:&nbsp;&nbsp;<b>$x_u = x_c - y_t \\sin\\theta_c - 0.25$</b>, &nbsp;&nbsp;<b>$y_u = y_c + y_t \\cos\\theta_c$</b> "
-        "<br/>&nbsp;&nbsp;&nbsp;&nbsp;Lower Surface:&nbsp;&nbsp;<b>$x_l = x_c + y_t \\sin\\theta_c - 0.25$</b>, &nbsp;&nbsp;<b>$y_l = y_c - y_t \\cos\\theta_c$</b>",
-        body_style
-    ))
-
-    story.append(Paragraph("Why Cosine Point Clustering is Mandatory for CAD Splines:", h2_style))
-    story.append(Paragraph(
-        "If points along an airfoil are spaced uniformly in $x$, the leading edge nose has massive curvature change over just 1 or 2 discrete points. "
-        "When OpenCascade attempts to interpolate a cubic B-spline (`cq.Edge.makeSpline`), this sparse spacing creates severe Runge-phenomenon ripples "
-        "and curvature spikes. Our software clusters points tightly at the nose using cosine distribution: "
-        "<b>$x_c = \\frac{1}{2}(1 - \\cos\\beta_k)$</b> for $\\beta_k \\in [0, \\pi]$. Over 60% of all control points are concentrated in the first 15% chord, "
-        "guaranteeing a mirror-smooth, high-precision leading edge.",
-        body_style
-    ))
-
-    story.append(PageBreak())
-
-    # ==========================================================================
-    # PAGE 3: PITCH, TWIST, & CLOCKWISE (CW) ROTATION STANDARD
-    # ==========================================================================
-    story.append(Paragraph("5. The Physics of Pitch, Twist, & Clockwise (CW) Rotation", h1_style))
-    story.append(Paragraph(
-        "Why is a propeller blade twisted like a propeller propeller? Consider a blade rotating at angular velocity $\\Omega$ (rad/s). "
-        "A point at radius $r$ travels at linear rotational speed <b>$V_{rot} = \\Omega r$</b>. Near the hub ($r = 0.15R$), the rotational speed is slow; "
-        "at the blade tip ($r = 1.0R$), the rotational speed is enormous. If the blade were flat (untwisted), the root would stall while the tip would see "
-        "an overwhelming relative wind angle. To keep the effective Angle of Attack ($\\alpha$) uniform across the entire span, the blade must be twisted steeply "
-        "at the root and flat at the tip.",
-        body_style
-    ))
-
-    story.append(Image(str(diag2_path), width=7.4 * inch, height=2.66 * inch))
-    story.append(Spacer(1, 4))
-
-    story.append(Paragraph("The Helix Screw Formula & Coordinate System Standards:", h2_style))
-    story.append(Paragraph(
-        "By definition, a propeller with geometric pitch $P$ advances a forward distance $P$ in one 360° revolution. "
-        "Unrolling the cylindrical path of radius $r$ forms a right-angled triangle where the base is the circular circumference $2\\pi r$ "
-        "and the vertical advance is $P$. The local geometric pitch angle is: "
-        "<br/>&nbsp;&nbsp;&nbsp;&nbsp;<b>$\\beta(r) = \\arctan\\left(\\frac{P}{2\\pi r}\\right)$</b> "
-        "<br/>For our $10\\times 4.5\\text{ in}$ benchmark ($D = 254\\text{ mm}, P = 114.3\\text{ mm}$): "
-        "<br/>• At the hub blend ($r = 25.4\\text{ mm}$): $\\beta \\approx 35.6^\\circ$ (steep bite to push low-speed air). "
-        "<br/>• At the blade tip ($r = 127.0\\text{ mm}$): $\\beta \\approx 8.1^\\circ$ (shallow bite to match high rotational speed).",
-        body_style
-    ))
-
-    story.append(Paragraph("Clockwise (CW) Coordinate Convention & Pushing Direction (+Z Thrust):", h2_style))
-    story.append(Paragraph(
-        "In our standard right-handed Cartesian coordinate system $(X, Y, Z)$ where $+Z$ points upstream along the flight/thrust axis: "
-        "<br/>1. Looking from upstream $+Z$ downstream toward $-Z$, <b>Clockwise (CW) rotation</b> moves a blade at the $+Y$ axis ($X=0, Y=r$) toward the <b>$+X$ direction</b>. "
-        "<br/>2. Therefore, the blunt <b>Leading Edge (LE)</b> MUST point toward <b>$(+X, +Z)$</b>, and the sharp <b>Trailing Edge (TE)</b> MUST point toward <b>$(-X, -Z)$</b>. "
-        "<br/>3. The cambered <b>Suction Surface (Upper)</b> MUST face <b>$+Z$ (upstream)</b>, and the <b>Pressure Surface (Lower)</b> MUST face <b>$-Z$ (downstream)</b>. "
-        "<br/>4. When air hits the leading edge, it accelerates over the $+Z$ convex suction side, generating low pressure that pulls the propeller into $+Z$ (forward thrust), "
-        "while pushing downwash momentum into $-Z$.",
-        body_style
-    ))
-
-    story.append(Paragraph("Blade Element Momentum Theory (BEMT) Thrust Verification:", h2_style))
-    story.append(Paragraph(
-        "Our engine includes an analytical BEMT validation module based on McCormick (1995) and Adkins & Liebeck (1994). "
-        "It balances blade element lift with annular momentum theory including Prandtl's tip-loss factor: "
-        "<b>$dT = \\frac{1}{2} \\rho V_{eff}^2 c(r) [C_L \\cos\\phi_i - C_D \\sin\\phi_i] dr = 4\\pi \\rho r v_i^2 F dr$</b>. "
-        "For our $10\\times 4.5$ propeller at 6,000 RPM, this analytical integration predicts <b>$T = 6.38\\text{ N} \\ (650\\text{ gf})$</b>, "
-        "matching experimental UIUC wind-tunnel benchmarks and providing an instant sanity check before running 3D CFD.",
-        body_style
-    ))
-
-    story.append(PageBreak())
-
-    # ==========================================================================
-    # PAGE 4: MATHEMATICAL CAD PIPELINE (STEP GENERATION)
-    # ==========================================================================
-    story.append(Paragraph("6. From 2D Curves to a Watertight 3D CAD Solid (The Pipeline)", h1_style))
-    story.append(Paragraph(
-        "Exporting a geometric shape for Computational Fluid Dynamics (CFD) requires vastly higher mathematical rigor than 3D printing. "
-        "CFD meshing algorithms (e.g., Ansys Fluent, STAR-CCM+, OpenFOAM) require a <b>watertight 2-manifold B-Rep solid</b> with zero open boundaries, "
-        "zero non-manifold edge singularities, and exact tangent continuity ($C^2$). Here is how our Python engine achieves this step-by-step:",
-        body_style
-    ))
-
-    story.append(Image(str(diag3_path), width=7.4 * inch, height=2.66 * inch))
-    story.append(Spacer(1, 4))
-
-    steps = [
-        ("Step 1: Radial Station Discretization:",
-         "The blade span is discretized into 22 radial stations using a cosine distribution with explicit anchors at the hub blend ($r_{root}$), "
-         "transition inflection, and tip closure (0.96R, 0.99R, 1.0R). This clusters stations near the tip where 3D vortex gradients are steepest."),
-        ("Step 2: 2D Section Transformation & Conformal Orientation:",
-         "At each radius $r$, the local chord $c(r)$ and pitch angle $\\beta(r)$ scale and rotate the 2D NACA coordinates: "
-         "<b>$s_{tan} = -x_s \\cos\\beta - y_s \\sin\\beta + \\text{sweep}(r)$</b>, &nbsp;<b>$z_{axial} = -x_s \\sin\\beta + y_s \\cos\\beta$</b>. "
-         "In accordance with Carlton (2018), this maps tangential arc length onto coaxial cylinders without flat-plane distortion."),
-        ("Step 3: Dual-Spline Closed Wire Construction (`cq.Wire.assembleEdges`):",
-         "A single continuous spline wrapped all the way around an airfoil tends to round off the trailing edge. Our program constructs "
-         "two separate periodic cubic B-splines (`upper` from TE to LE, and `lower` from LE back to TE) and joins them with exact tangent closure at the trailing edge."),
-        ("Step 4: Non-Uniform Rational B-Spline (NURBS) Lofting (`BRepOffsetAPI_ThruSections`):",
-         "OpenCascade lofts a $C^2$-continuous NURBS skin through all 22 wires. To close the tip aerodynamically without leaving a blunt planar face, "
-         "the outer 0.8% of the blade radius is capped with an ellipsoidal dome closing smoothly to a terminal apex vertex."),
-        ("Step 5: Hub Fusion & Center Mounting Bore Cut:",
-         "The single lofted blade is rotated $k \\times (360^\\circ / B)$ and boolean-fused into the cylindrical hub blank. Finally, a concentric cylindrical "
-         "mounting hole ($d_{bore} = 0.45 d_{hub}$) is bored clean through the shaft axis, and all topological edge incidences are audited."),
-    ]
-    for title, desc in steps:
-        story.append(Paragraph(f"<b>{title}</b> {desc}", body_style))
-
-    story.append(PageBreak())
-
-    # ==========================================================================
-    # PAGE 5: ANNOTATED BIBLIOGRAPHY OF FOUNDATIONAL RESEARCH PAPERS
-    # ==========================================================================
-    story.append(Paragraph("7. Foundational Literature & Research Papers Used in This Software", h1_style))
-    story.append(Paragraph(
-        "Every mathematical formula, curve distribution, and CAD algorithm in this software is directly grounded in peer-reviewed "
-        "aerospace literature and computational geometry treatises. Below is the annotated bibliography of the foundational works and their "
-        "exact technical implementation in our codebase:",
-        body_style
-    ))
-    story.append(Spacer(1, 4))
-
-    papers = [
-        ("1. Jacobs, E. N., Ward, K. E., & Pinkerton, R. M. (1933) / Abbott, I. H., & Von Doenhoff, A. E. (1959).",
-         "<i>The Characteristics of 78 Related Airfoil Sections from Tests in the Variable-Density Wind Tunnel</i> (NACA Report No. 460) & "
-         "<i>Theory of Wing Sections</i> (Dover Publications, New York).",
-         "Provides the exact analytical polynomial for the NACA 4-digit thickness envelope $y_t(x_c)$, parabolic mean camber line $y_c(x_c)$, "
-         "and orthogonal surface projection $(\\pm y_t \\sin\\theta_c, \\pm y_t \\cos\\theta_c)$ implemented in <code>core/math_engine.py</code>. "
-         "Includes the vital $-0.1036 x_c^4$ closed trailing-edge coefficient adjustment required to produce a zero-thickness, manifold trailing edge in CAD."),
-
-        ("2. Brandt, J. B., & Selig, M. S. (2011).",
-         r'<i>"Propeller Performance Data at Low Reynolds Numbers."</i> 49th AIAA Aerospace Sciences Meeting (AIAA 2011-1255), University of Illinois at Urbana-Champaign (UIUC).',
-         r"Establishes experimental thrust coefficient ($C_T$) and propulsive efficiency ($\eta$) benchmarks for small-to-medium UAV propellers "
-         "operating at low chord Reynolds numbers ($Re = 50,000\\text{--}100,000$). Directly justifies our selection of the cambered NACA 4412-to-44085 profile "
-         "and full-solidity chord distribution ($c_{max} \\approx 0.155D$ at $r/R \\approx 0.50$) to avoid laminar separation stall and produce 100% rated thrust."),
-
-        ("3. Deters, R. W., Ananda Krishnan, G. K., & Selig, M. S. (2014).",
-         "<i>\"Reynolds Number Effects on the Performance of Small-Scale Propellers.\"</i> 32nd AIAA Applied Aerodynamics Conference (AIAA 2014-2151).",
-         "Demonstrates the extreme sensitivity of small-scale propeller thrust to leading-edge nose radius, camber orientation, and chord planform solidity. "
-         "Directly guided our root-cause thrust audit against backwards coordinate flipping, inverted suction camber, and under-sized chord distributions."),
-
-        ("4. Adkins, C. N., & Liebeck, R. H. (1994).",
-         "<i>\"Design of Optimum Propellers.\"</i> <i>Journal of Propulsion and Power</i>, 10(5), 676–682 (AIAA).",
-         "Formulates modern vortex and Blade Element Momentum Theory (BEMT) equations connecting local chord $c(r)$, geometric pitch angle $\\beta(r) = \\arctan(P / 2\\pi r)$, "
-         "and lift polars $C_L(\\alpha)$ to differential axial thrust $dT$. Implemented directly in our analytical verification function <code>estimate_static_thrust_bemt()</code> "
-         "and telemetry readout."),
-
-        ("5. Carlton, J. (2018).",
-         "<i>Marine Propellers and Propulsion</i> (4th ed., Chapter 3: \"Propeller Geometry\"). Butterworth-Heinemann.",
-         "Defines the rigorous 3D cylindrical conformal transformation ($s_{tan} \\to \\gamma = s_{tan}/r \\to X = r\\sin\\gamma, Y = r\\cos\\gamma, Z = z_{axial}$) "
-         "used in <code>core/math_engine.py</code> to wrap 2D blade sections onto coaxial cylindrical stream-surfaces without flat-plane chord distortion."),
-
-        ("6. Piegl, L., & Tiller, W. (1997).",
-         "<i>The NURBS Book</i> (2nd ed.). Springer-Verlag.",
-         "Governs the Non-Uniform Rational B-Spline (NURBS) curve interpolation (`makeSpline`) and skinned surface lofting (`makeLoft` / `BRepOffsetAPI_ThruSections`) "
-         "executed by the OpenCascade kernel in <code>core/cad_generator.py</code> to turn discrete 3D station points into a $C^2$-continuous, watertight ISO 10303-21 STEP solid."),
-    ]
-
-    for title, citation, relevance in papers:
-        story.append(Paragraph(f"<b>{title}</b>", body_bold))
-        story.append(Paragraph(citation, body_style))
-        story.append(Paragraph(f"<b>Code Implementation & Mathematical Relevance:</b> {relevance}", callout_style))
-        story.append(Spacer(1, 1))
-
-    print(f"Building PDF document at {OUTPUT_PDF}...")
-    doc.build(story, canvasmaker=NumberedCanvas)
-    print(f"SUCCESS: Study.pdf generated at {OUTPUT_PDF} (Size: {OUTPUT_PDF.stat().st_size} bytes)")
+    glyphs = verify_text_glyphs()
+    doc.build(story, onFirstPage=doc.decorate, onLaterPages=doc.decorate,
+              canvasmaker=partial(canvas.Canvas, invariant=1, initialFontName="Plex"))
+    actual_pages = max(row["page"] for row in doc.chapter_pages)
+    positions_correct = [row["page"] for row in doc.chapter_pages] == list(range(1, page_count + 1))
+    report = {**glyphs, "expected_pages": page_count, "chapter_pages": doc.chapter_pages,
+              "chapters_on_expected_pages": positions_correct,
+              "benchmark": {"diameter_mm": p.diameter_mm, "pitch_mm": p.pitch_mm,
+                            "blades": p.num_blades, "hub_height_mm": p.hub_length_mm,
+                            "root_pitch_deg": p.root_pitch_deg, "thrust_n": thrust},
+              "output": str(Path(output_path).resolve()), "bytes": Path(output_path).stat().st_size}
+    report_path = ROOT / "work" / "study-build.report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    if not positions_correct:
+        raise RuntimeError(f"Chapter layout overflow: inspect {report_path}; last heading at page {actual_pages}")
+    print(f"Built {output_path}: {page_count} pages; {glyphs['vector_equations_and_symbols']} vector equations/symbols; no missing text glyphs.")
+    return report
 
 
 if __name__ == "__main__":
-    build_study_pdf()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=ROOT / "Study.pdf")
+    build_study_pdf(parser.parse_args().output)
